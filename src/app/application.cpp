@@ -6,6 +6,7 @@
 #include "llm/ollama_client.hpp"
 #include "parsing/chunk_extractor.hpp"
 #include "retrieval/retriever.hpp"
+#include "session/chat_session.hpp"
 #include "support/utils.hpp"
 
 #include <filesystem>
@@ -300,6 +301,9 @@ int run_command(const fs::path& root, const CommandRequest& request) {
             return 1;
         }
         return cmd_ask(root, request.args.front());
+    }
+    if (request.name == "chat") {
+        return run_interactive_chat(root, load_config(root), std::cin, std::cout);
     }
     if (request.name == "explain") {
         if (request.args.empty() || request.args.front().empty()) {

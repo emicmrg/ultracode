@@ -115,6 +115,7 @@ set(ULTRACODE_LIB_SOURCES
     src/llm/ollama_client.cpp
     src/parsing/chunk_extractor.cpp
     src/retrieval/retriever.cpp
+    src/session/chat_session.cpp
     ${ULTRACODE_TS_SOURCES}
 )
 

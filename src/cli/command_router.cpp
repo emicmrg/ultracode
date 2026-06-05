@@ -41,5 +41,6 @@ void print_help(std::ostream& out) {
         << "  ultracode stats\n"
         << "  ultracode search <query>\n"
         << "  ultracode ask <question>\n"
+        << "  ultracode chat\n"
         << "  ultracode explain <file>\n";
 }

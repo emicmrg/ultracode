@@ -1,12 +1,15 @@
 #include "app/application.hpp"
+#include "app/config.hpp"
 #include "index/index_store.hpp"
 #include "parsing/chunk_extractor.hpp"
+#include "session/chat_session.hpp"
 #include "support/utils.hpp"
 
 #include <cassert>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <sstream>
 #include <string>
 
 namespace fs = std::filesystem;
@@ -170,6 +173,28 @@ static void test_vector_store_roundtrip() {
     std::cout << "PASS: vector store roundtrip\n";
 }
 
+static void test_chat_session_commands() {
+    const fs::path repo = make_temp_repo();
+    const CommandRequest init_request{"init", {}};
+    assert(run_command(repo, init_request) == 0);
+
+    Config cfg = load_config(repo);
+    std::istringstream input("/context\n/model tiny-test-model\n/model\n/clear\n/exit\n");
+    std::ostringstream output;
+    assert(run_interactive_chat(repo, cfg, input, output) == 0);
+
+    const std::string rendered = output.str();
+    assert(rendered.find("Entering chat mode") != std::string::npos);
+    assert(rendered.find("Active context") != std::string::npos);
+    assert(rendered.find("Session model set to: tiny-test-model") != std::string::npos);
+    assert(rendered.find("Current session model: tiny-test-model") != std::string::npos);
+    assert(rendered.find("Session cleared.") != std::string::npos);
+    assert(rendered.find("Leaving chat mode.") != std::string::npos);
+
+    fs::remove_all(repo);
+    std::cout << "PASS: chat session commands\n";
+}
+
 int main() {
     test_detect_language();
     test_cpp_chunking();
@@ -179,6 +204,7 @@ int main() {
     test_markdown_chunking();
     test_incremental_indexing();
     test_vector_store_roundtrip();
+    test_chat_session_commands();
     std::cout << "All tests passed.\n";
     return 0;
 }
