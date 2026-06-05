@@ -30,7 +30,8 @@ static double lexical_score(const std::string& query,
 std::vector<RankedChunk> retrieve(const fs::path& root,
                                    const Config& cfg,
                                    const std::string& query,
-                                   int top_k) {
+                                   int top_k,
+                                   const std::set<std::string>& preferred_paths) {
     const auto chunks = load_manifest(root);
     const auto vectors = load_vector_store(root);
     const OllamaClient ollama(cfg);
@@ -44,7 +45,8 @@ std::vector<RankedChunk> retrieve(const fs::path& root,
         const std::vector<float> cv = it != vectors.end() ? it->second : std::vector<float>{};
         const double vs           = dot_product(qv, cv);
         const double ls           = lexical_score(query, c, content);
-        const double score        = 0.62 * vs + 0.38 * ls;
+        const double diff_bonus   = preferred_paths.count(c.path) ? 0.15 : 0.0;
+        const double score        = 0.62 * vs + 0.38 * ls + diff_bonus;
         ranked.push_back({c, score, vs, ls, content});
     }
     std::sort(ranked.begin(), ranked.end(),

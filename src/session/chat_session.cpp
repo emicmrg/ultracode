@@ -3,6 +3,7 @@
 #include "llm/ollama_client.hpp"
 #include "retrieval/retriever.hpp"
 #include "support/utils.hpp"
+#include "vcs/git_diff.hpp"
 
 #include <algorithm>
 #include <iostream>
@@ -105,7 +106,8 @@ int run_interactive_chat(const std::filesystem::path& root,
             continue;
         }
 
-        const auto ranked = retrieve(root, cfg, line, cfg.top_k);
+        const auto diff_context = load_repo_diff_context(root, cfg.max_context_chars / 3);
+        const auto ranked = retrieve(root, cfg, line, cfg.top_k, diff_context.changed_paths);
         state.last_sources.clear();
         for (const auto& r : ranked) {
             state.last_sources.push_back(
@@ -126,7 +128,9 @@ int run_interactive_chat(const std::filesystem::path& root,
         const std::string context = render_context_blocks(ranked, cfg.max_context_chars);
         messages.push_back(ChatMessage{
             "user",
-            "Question:\n" + line + "\n\nRelevant code context:\n" + context
+            "Question:\n" + line +
+            "\n\nRelevant code context:\n" + context +
+            (diff_context.diff_text.empty() ? "" : "\nWorking tree diff:\n" + diff_context.diff_text)
         });
 
         out << "> ";

@@ -1,6 +1,7 @@
 #include "app/application.hpp"
 
 #include "app/config.hpp"
+#include "edit/patch_workflow.hpp"
 #include "index/index_store.hpp"
 #include "index/repo_scanner.hpp"
 #include "llm/ollama_client.hpp"
@@ -8,6 +9,7 @@
 #include "retrieval/retriever.hpp"
 #include "session/chat_session.hpp"
 #include "support/utils.hpp"
+#include "vcs/git_diff.hpp"
 
 #include <filesystem>
 #include <iomanip>
@@ -244,7 +246,8 @@ int cmd_explain(const fs::path& root, const std::string& file) {
 
 int cmd_ask(const fs::path& root, const std::string& query) {
     const Config cfg = load_config(root);
-    const auto ranked = retrieve(root, cfg, query, cfg.top_k);
+    const auto diff_context = load_repo_diff_context(root, cfg.max_context_chars / 3);
+    const auto ranked = retrieve(root, cfg, query, cfg.top_k, diff_context.changed_paths);
     std::ostringstream ctx;
     int used = 0;
     for (const auto& r : ranked) {
@@ -266,13 +269,76 @@ int cmd_ask(const fs::path& root, const std::string& query) {
         "code context. If context is insufficient, say what is missing. Always cite "
         "file paths and line ranges.";
     const std::string user =
-        "Question:\n" + query + "\n\nRelevant code context:\n" + ctx.str();
+        "Question:\n" + query + "\n\nRelevant code context:\n" + ctx.str() +
+        (diff_context.diff_text.empty() ? "" : "\nWorking tree diff:\n" + diff_context.diff_text);
     const OllamaClient ollama(cfg);
     std::cout << ollama.chat(system, user) << "\n\nSources:\n";
     for (const auto& r : ranked) {
         std::cout << "- " << r.chunk.path << ":" << r.chunk.start_line
                   << "-" << r.chunk.end_line << " " << r.chunk.symbol << '\n';
     }
+    return 0;
+}
+
+int cmd_patch(const fs::path& root, const std::string& instruction) {
+    ensure_workspace(root);
+    const Config cfg = load_config(root);
+    const auto diff_context = load_repo_diff_context(root, cfg.max_context_chars / 3);
+    const auto ranked = retrieve(root, cfg, instruction, cfg.top_k, diff_context.changed_paths);
+
+    std::ostringstream ctx;
+    int used = 0;
+    for (const auto& r : ranked) {
+        std::ostringstream block;
+        block << "<chunk path=\"" << r.chunk.path << "\" lines=\""
+              << r.chunk.start_line << "-" << r.chunk.end_line
+              << "\" symbol=\"" << r.chunk.symbol << "\">\n"
+              << r.content << "\n</chunk>\n\n";
+        const std::string rendered = block.str();
+        if (used + static_cast<int>(rendered.size()) > cfg.max_context_chars) {
+            break;
+        }
+        ctx << rendered;
+        used += static_cast<int>(rendered.size());
+    }
+
+    const std::string system =
+        "You are a local coding assistant. Return only a unified diff patch. "
+        "Do not include markdown fences or commentary.";
+    const std::string user =
+        "Requested change:\n" + instruction +
+        "\n\nRelevant code context:\n" + ctx.str() +
+        (diff_context.diff_text.empty() ? "" : "\nWorking tree diff:\n" + diff_context.diff_text);
+    const OllamaClient ollama(cfg);
+    const std::string diff_text = ollama.chat(system, user);
+    const auto target_paths = extract_patch_target_paths(diff_text);
+    const PatchProposal proposal = save_patch_proposal(root, instruction, diff_text, target_paths);
+
+    std::cout << "Saved patch proposal " << proposal.id
+              << " targeting " << proposal.target_paths.size() << " file(s).\n";
+    for (const auto& path : proposal.target_paths) {
+        std::cout << "- " << path << '\n';
+    }
+    return 0;
+}
+
+int cmd_apply(const fs::path& root, const std::string& patch_id) {
+    std::string error;
+    if (!apply_patch_proposal(root, patch_id, &error)) {
+        std::cerr << "Failed to apply patch " << patch_id << ": " << error << '\n';
+        return 1;
+    }
+    std::cout << "Applied patch " << patch_id << ".\n";
+    return 0;
+}
+
+int cmd_reject(const fs::path& root, const std::string& patch_id) {
+    std::string error;
+    if (!reject_patch_proposal(root, patch_id, &error)) {
+        std::cerr << "Failed to reject patch " << patch_id << ": " << error << '\n';
+        return 1;
+    }
+    std::cout << "Rejected patch " << patch_id << ".\n";
     return 0;
 }
 
@@ -304,6 +370,27 @@ int run_command(const fs::path& root, const CommandRequest& request) {
     }
     if (request.name == "chat") {
         return run_interactive_chat(root, load_config(root), std::cin, std::cout);
+    }
+    if (request.name == "patch") {
+        if (request.args.empty() || request.args.front().empty()) {
+            std::cerr << "Missing patch instruction.\n";
+            return 1;
+        }
+        return cmd_patch(root, request.args.front());
+    }
+    if (request.name == "apply") {
+        if (request.args.empty() || request.args.front().empty()) {
+            std::cerr << "Missing patch id.\n";
+            return 1;
+        }
+        return cmd_apply(root, request.args.front());
+    }
+    if (request.name == "reject") {
+        if (request.args.empty() || request.args.front().empty()) {
+            std::cerr << "Missing patch id.\n";
+            return 1;
+        }
+        return cmd_reject(root, request.args.front());
     }
     if (request.name == "explain") {
         if (request.args.empty() || request.args.front().empty()) {

@@ -1,9 +1,11 @@
 #include "app/application.hpp"
 #include "app/config.hpp"
+#include "edit/patch_workflow.hpp"
 #include "index/index_store.hpp"
 #include "parsing/chunk_extractor.hpp"
 #include "session/chat_session.hpp"
 #include "support/utils.hpp"
+#include "vcs/git_diff.hpp"
 
 #include <cassert>
 #include <cstdlib>
@@ -195,6 +197,65 @@ static void test_chat_session_commands() {
     std::cout << "PASS: chat session commands\n";
 }
 
+static void init_git_repo(const fs::path& repo) {
+    run_command_capture("git -C " + shell_quote(repo.string()) + " init 2>/dev/null");
+    run_command_capture("git -C " + shell_quote(repo.string()) + " config user.email test@example.com");
+    run_command_capture("git -C " + shell_quote(repo.string()) + " config user.name test");
+    run_command_capture("git -C " + shell_quote(repo.string()) + " add .");
+    run_command_capture("git -C " + shell_quote(repo.string()) + " commit -m init 2>/dev/null");
+}
+
+static void test_git_diff_context() {
+    const fs::path repo = make_temp_repo();
+    init_git_repo(repo);
+    write_text(repo / "hello.py", slurp(repo / "hello.py") + "\n# local change\n");
+
+    const auto diff_context = load_repo_diff_context(repo);
+    assert(!diff_context.diff_text.empty());
+    assert(diff_context.changed_paths.count("hello.py") == 1);
+
+    fs::remove_all(repo);
+    std::cout << "PASS: git diff context\n";
+}
+
+static void test_patch_apply_reject_workflow() {
+    const fs::path repo = fs::temp_directory_path() / ("ultracode-patch-test-" + std::to_string(std::rand()));
+    fs::create_directories(repo);
+    write_text(repo / "note.txt", "hello\n");
+    init_git_repo(repo);
+
+    const std::string diff_text =
+        "--- a/note.txt\n"
+        "+++ b/note.txt\n"
+        "@@ -1 +1 @@\n"
+        "-hello\n"
+        "+hi\n";
+    const auto targets = extract_patch_target_paths(diff_text);
+    assert(targets.size() == 1 && targets.front() == "note.txt");
+
+    auto proposal = save_patch_proposal(repo, "change greeting", diff_text, targets);
+    std::string error;
+    assert(apply_patch_proposal(repo, proposal.id, &error));
+    assert(slurp(repo / "note.txt") == "hi\n");
+    auto applied = load_patch_proposal(repo, proposal.id);
+    assert(applied && applied->status == "applied");
+
+    auto rejected = save_patch_proposal(repo, "reject me", diff_text, targets);
+    assert(reject_patch_proposal(repo, rejected.id, &error));
+    auto rejected_meta = load_patch_proposal(repo, rejected.id);
+    assert(rejected_meta && rejected_meta->status == "rejected");
+
+    auto invalid = save_patch_proposal(repo, "invalid", "not a diff\n", {});
+    assert(!apply_patch_proposal(repo, invalid.id, &error));
+
+    write_text(repo / "note.txt", "drifted\n");
+    auto drift = save_patch_proposal(repo, "drift", diff_text, targets);
+    assert(!apply_patch_proposal(repo, drift.id, &error));
+
+    fs::remove_all(repo);
+    std::cout << "PASS: patch apply/reject workflow\n";
+}
+
 int main() {
     test_detect_language();
     test_cpp_chunking();
@@ -205,6 +266,8 @@ int main() {
     test_incremental_indexing();
     test_vector_store_roundtrip();
     test_chat_session_commands();
+    test_git_diff_context();
+    test_patch_apply_reject_workflow();
     std::cout << "All tests passed.\n";
     return 0;
 }

@@ -4,6 +4,7 @@
 #include "parsing/chunk.hpp"
 
 #include <filesystem>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -11,4 +12,5 @@
 std::vector<RankedChunk> retrieve(const std::filesystem::path& root,
                                    const Config& cfg,
                                    const std::string& query,
-                                   int top_k);
+                                   int top_k,
+                                   const std::set<std::string>& preferred_paths = {});

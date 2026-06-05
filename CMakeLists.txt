@@ -110,12 +110,14 @@ set(ULTRACODE_LIB_SOURCES
     src/app/application.cpp
     src/app/config.cpp
     src/cli/command_router.cpp
+    src/edit/patch_workflow.cpp
     src/index/index_store.cpp
     src/index/repo_scanner.cpp
     src/llm/ollama_client.cpp
     src/parsing/chunk_extractor.cpp
     src/retrieval/retriever.cpp
     src/session/chat_session.cpp
+    src/vcs/git_diff.cpp
     ${ULTRACODE_TS_SOURCES}
 )
 

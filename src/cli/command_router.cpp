@@ -25,7 +25,7 @@ std::optional<CommandRequest> parse_command_request(int argc, char** argv) {
 
     CommandRequest request;
     request.name = argv[1];
-    if (request.name == "search" || request.name == "ask") {
+    if (request.name == "search" || request.name == "ask" || request.name == "patch") {
         request.args.push_back(collect_args(argc, argv, 2));
     } else if (argc >= 3) {
         request.args.push_back(argv[2]);
@@ -42,5 +42,8 @@ void print_help(std::ostream& out) {
         << "  ultracode search <query>\n"
         << "  ultracode ask <question>\n"
         << "  ultracode chat\n"
+        << "  ultracode patch <instruction>\n"
+        << "  ultracode apply <patch-id>\n"
+        << "  ultracode reject <patch-id>\n"
         << "  ultracode explain <file>\n";
 }
