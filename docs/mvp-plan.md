@@ -19,7 +19,8 @@ Implemented in this MVP:
 
 - CLI commands: `init`, `index`, `stats`, `search`, `ask`, `explain`.
 - Local `.ultracode/` workspace.
-- Heuristic code chunking.
+- Heuristic code chunking for C/C++, Go, Python, JavaScript/TypeScript, Markdown, and config files.
+- Go chunking for functions, methods with receivers, structs, and interfaces.
 - Ollama `/api/embed` integration.
 - Ollama `/api/chat` integration.
 - Local fallback embeddings.
@@ -31,7 +32,7 @@ Implemented in this MVP:
 
 - Introduce `ChunkExtractor` interface.
 - Add Tree-sitter C/C++ extractor.
-- Add Python and TypeScript Tree-sitter extractors.
+- Add Go, Python, and TypeScript Tree-sitter extractors.
 - Preserve heuristic extractor as fallback.
 
 ## Phase 3: better performance
