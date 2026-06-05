@@ -1,0 +1,25 @@
+Start testing: Jun 05 06:12 UTC
+----------------------------------------------------------
+1/1 Testing: test_chunking
+1/1 Test: test_chunking
+Command: "/tmp/workspace/emicmrg/test-cpp-app/build_nots/test_chunking"
+Directory: /tmp/workspace/emicmrg/test-cpp-app/build_nots
+"test_chunking" start time: Jun 05 06:12 UTC
+Output:
+----------------------------------------------------------
+PASS: detect_language
+PASS: C++ chunking (3 chunks)
+PASS: Python chunking (2 chunks)
+PASS: Go chunking (4 chunks)
+PASS: TypeScript chunking (2 chunks)
+PASS: Markdown chunking (2 chunks)
+All tests passed.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"test_chunking" end time: Jun 05 06:12 UTC
+"test_chunking" time elapsed: 00:00:00
+----------------------------------------------------------
+
+End testing: Jun 05 06:12 UTC
