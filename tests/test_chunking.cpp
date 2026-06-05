@@ -1,5 +1,6 @@
 #include "app/application.hpp"
 #include "app/config.hpp"
+#include "cli/command_router.hpp"
 #include "edit/patch_workflow.hpp"
 #include "index/index_store.hpp"
 #include "parsing/chunk_extractor.hpp"
@@ -109,8 +110,8 @@ static fs::path make_temp_repo() {
 
 static void test_incremental_indexing() {
     const fs::path repo = make_temp_repo();
-    const CommandRequest init_request{"init", {}};
-    const CommandRequest index_request{"index", {}};
+    const CommandRequest init_request{"init", "", {}};
+    const CommandRequest index_request{"index", "", {}};
 
     assert(run_command(repo, init_request) == 0);
     assert(run_command(repo, index_request) == 0);
@@ -177,7 +178,7 @@ static void test_vector_store_roundtrip() {
 
 static void test_chat_session_commands() {
     const fs::path repo = make_temp_repo();
-    const CommandRequest init_request{"init", {}};
+    const CommandRequest init_request{"init", "", {}};
     assert(run_command(repo, init_request) == 0);
 
     Config cfg = load_config(repo);
@@ -306,6 +307,25 @@ static void test_patch_sanitization_and_validation() {
     std::cout << "PASS: patch sanitization and validation\n";
 }
 
+static void test_command_router_file_target() {
+    const char* argv[] = {
+        "ultracode",
+        "patch",
+        "--file",
+        "src/lib/catalog.ts",
+        "agrega",
+        "10",
+        "comidas"
+    };
+    auto request = parse_command_request(7, const_cast<char**>(argv));
+    assert(request.has_value());
+    assert(request->name == "patch");
+    assert(request->file_target == "src/lib/catalog.ts");
+    assert(request->args.size() == 1);
+    assert(request->args[0] == "agrega 10 comidas");
+    std::cout << "PASS: command router file target\n";
+}
+
 int main() {
     test_detect_language();
     test_cpp_chunking();
@@ -319,6 +339,7 @@ int main() {
     test_git_diff_context();
     test_patch_apply_reject_workflow();
     test_patch_sanitization_and_validation();
+    test_command_router_file_target();
     std::cout << "All tests passed.\n";
     return 0;
 }

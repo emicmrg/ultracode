@@ -29,6 +29,63 @@ struct ChunkEmbeddingRequest {
     std::string content;
 };
 
+std::string normalize_repo_relative_path(const fs::path& root, const std::string& file_target) {
+    if (file_target.empty()) {
+        return {};
+    }
+    fs::path candidate(file_target);
+    if (candidate.is_absolute()) {
+        std::error_code ec;
+        const fs::path relative = fs::relative(candidate, root, ec);
+        if (!ec && !relative.empty()) {
+            return relative.generic_string();
+        }
+        return {};
+    }
+    return candidate.generic_string();
+}
+
+bool validate_file_target(const fs::path& root,
+                          const std::string& file_target,
+                          std::string* normalized_path = nullptr) {
+    const std::string rel = normalize_repo_relative_path(root, file_target);
+    if (rel.empty()) {
+        return false;
+    }
+    const fs::path full_path = root / rel;
+    if (!fs::exists(full_path) || !fs::is_regular_file(full_path)) {
+        return false;
+    }
+    if (normalized_path) {
+        *normalized_path = rel;
+    }
+    return true;
+}
+
+std::string render_file_block(const fs::path& root,
+                              const std::string& file_target,
+                              int max_context_chars) {
+    if (file_target.empty()) {
+        return {};
+    }
+    std::string content = slurp(root / file_target);
+    if (content.empty()) {
+        return {};
+    }
+    if (static_cast<int>(content.size()) > max_context_chars) {
+        content = content.substr(0, static_cast<size_t>(max_context_chars));
+    }
+    return "<file path=\"" + file_target + "\">\n" + content + "\n</file>\n\n";
+}
+
+std::vector<RankedChunk> retrieve_for_request(const fs::path& root,
+                                              const Config& cfg,
+                                              const std::string& query,
+                                              const std::set<std::string>& preferred_paths,
+                                              const std::string& file_target) {
+    return retrieve(root, cfg, query, cfg.top_k, preferred_paths, file_target);
+}
+
 int cmd_init(const fs::path& root) {
     ensure_workspace(root);
     std::cout << "Initialized .ultracode/\n";
@@ -207,9 +264,17 @@ int cmd_stats(const fs::path& root) {
     return 0;
 }
 
-int cmd_search(const fs::path& root, const std::string& query) {
+int cmd_search(const fs::path& root,
+               const std::string& query,
+               const std::string& file_target) {
     const Config cfg = load_config(root);
-    const auto ranked = retrieve(root, cfg, query, cfg.top_k);
+    const auto diff_context = load_repo_diff_context(root, cfg.max_context_chars / 3);
+    std::string normalized_file_target;
+    if (!file_target.empty() && !validate_file_target(root, file_target, &normalized_file_target)) {
+        std::cerr << "Could not read file target: " << file_target << '\n';
+        return 1;
+    }
+    const auto ranked = retrieve_for_request(root, cfg, query, diff_context.changed_paths, normalized_file_target);
     for (size_t i = 0; i < ranked.size(); ++i) {
         const auto& r = ranked[i];
         std::cout << i + 1 << ". " << r.chunk.path << ":"
@@ -244,12 +309,24 @@ int cmd_explain(const fs::path& root, const std::string& file) {
     return 0;
 }
 
-int cmd_ask(const fs::path& root, const std::string& query) {
+int cmd_ask(const fs::path& root,
+            const std::string& query,
+            const std::string& file_target) {
     const Config cfg = load_config(root);
     const auto diff_context = load_repo_diff_context(root, cfg.max_context_chars / 3);
-    const auto ranked = retrieve(root, cfg, query, cfg.top_k, diff_context.changed_paths);
+    std::string normalized_file_target;
+    if (!file_target.empty() && !validate_file_target(root, file_target, &normalized_file_target)) {
+        std::cerr << "Could not read file target: " << file_target << '\n';
+        return 1;
+    }
+    const auto ranked = retrieve_for_request(root, cfg, query, diff_context.changed_paths, normalized_file_target);
     std::ostringstream ctx;
     int used = 0;
+    const std::string file_block = render_file_block(root, normalized_file_target, cfg.max_context_chars / 2);
+    if (!file_block.empty()) {
+        ctx << file_block;
+        used += static_cast<int>(file_block.size());
+    }
     for (const auto& r : ranked) {
         std::ostringstream block;
         block << "<chunk path=\"" << r.chunk.path << "\" lines=\""
@@ -280,14 +357,26 @@ int cmd_ask(const fs::path& root, const std::string& query) {
     return 0;
 }
 
-int cmd_patch(const fs::path& root, const std::string& instruction) {
+int cmd_patch(const fs::path& root,
+              const std::string& instruction,
+              const std::string& file_target) {
     ensure_workspace(root);
     const Config cfg = load_config(root);
     const auto diff_context = load_repo_diff_context(root, cfg.max_context_chars / 3);
-    const auto ranked = retrieve(root, cfg, instruction, cfg.top_k, diff_context.changed_paths);
+    std::string normalized_file_target;
+    if (!file_target.empty() && !validate_file_target(root, file_target, &normalized_file_target)) {
+        std::cerr << "Could not read file target: " << file_target << '\n';
+        return 1;
+    }
+    const auto ranked = retrieve_for_request(root, cfg, instruction, diff_context.changed_paths, normalized_file_target);
 
     std::ostringstream ctx;
     int used = 0;
+    const std::string file_block = render_file_block(root, normalized_file_target, cfg.max_context_chars / 2);
+    if (!file_block.empty()) {
+        ctx << file_block;
+        used += static_cast<int>(file_block.size());
+    }
     for (const auto& r : ranked) {
         std::ostringstream block;
         block << "<chunk path=\"" << r.chunk.path << "\" lines=\""
@@ -306,15 +395,21 @@ int cmd_patch(const fs::path& root, const std::string& instruction) {
         "You are a local coding assistant. Return only a complete unified diff patch. "
         "Do not include markdown fences, prose, bullets, explanations, or code outside the patch. "
         "Every file change must include diff --git, ---, +++, and @@ hunk headers.";
-    const std::string user =
+    std::string user =
         "Requested change:\n" + instruction +
         "\n\nRelevant code context:\n" + ctx.str() +
         "\n\nPatch requirements:\n"
         "- Modify only files that are necessary for the request.\n"
         "- Preserve the existing coding style and schema.\n"
         "- If adding repeated entries, add all requested entries, not a partial subset.\n"
-        "- Return only a valid unified diff.\n" +
-        (diff_context.diff_text.empty() ? "" : "\nWorking tree diff:\n" + diff_context.diff_text);
+        "- Return only a valid unified diff.\n";
+    if (!normalized_file_target.empty()) {
+        user += "- The primary file to modify is " + normalized_file_target + ".\n"
+                "- Prefer changing only that file unless the request strictly requires more.\n";
+    }
+    if (!diff_context.diff_text.empty()) {
+        user += "\nWorking tree diff:\n" + diff_context.diff_text;
+    }
     const OllamaClient ollama(cfg);
     const std::string diff_text = sanitize_patch_text(ollama.chat(system, user));
     std::string patch_error;
@@ -371,14 +466,14 @@ int run_command(const fs::path& root, const CommandRequest& request) {
             std::cerr << "Missing query.\n";
             return 1;
         }
-        return cmd_search(root, request.args.front());
+        return cmd_search(root, request.args.front(), request.file_target);
     }
     if (request.name == "ask") {
         if (request.args.empty() || request.args.front().empty()) {
             std::cerr << "Missing question.\n";
             return 1;
         }
-        return cmd_ask(root, request.args.front());
+        return cmd_ask(root, request.args.front(), request.file_target);
     }
     if (request.name == "chat") {
         return run_interactive_chat(root, load_config(root), std::cin, std::cout);
@@ -388,7 +483,7 @@ int run_command(const fs::path& root, const CommandRequest& request) {
             std::cerr << "Missing patch instruction.\n";
             return 1;
         }
-        return cmd_patch(root, request.args.front());
+        return cmd_patch(root, request.args.front(), request.file_target);
     }
     if (request.name == "apply") {
         if (request.args.empty() || request.args.front().empty()) {

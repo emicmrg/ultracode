@@ -31,7 +31,8 @@ std::vector<RankedChunk> retrieve(const fs::path& root,
                                    const Config& cfg,
                                    const std::string& query,
                                    int top_k,
-                                   const std::set<std::string>& preferred_paths) {
+                                   const std::set<std::string>& preferred_paths,
+                                   const std::string& required_path) {
     const auto chunks = load_manifest(root);
     const auto vectors = load_vector_store(root);
     const OllamaClient ollama(cfg);
@@ -46,7 +47,8 @@ std::vector<RankedChunk> retrieve(const fs::path& root,
         const double vs           = dot_product(qv, cv);
         const double ls           = lexical_score(query, c, content);
         const double diff_bonus   = preferred_paths.count(c.path) ? 0.15 : 0.0;
-        const double score        = 0.62 * vs + 0.38 * ls + diff_bonus;
+        const double file_bonus   = (!required_path.empty() && c.path == required_path) ? 1.0 : 0.0;
+        const double score        = 0.62 * vs + 0.38 * ls + diff_bonus + file_bonus;
         ranked.push_back({c, score, vs, ls, content});
     }
     std::sort(ranked.begin(), ranked.end(),
