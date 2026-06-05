@@ -1,8 +1,9 @@
-#include "chunk_extractor.hpp"
-#include "utils.hpp"
+#include "parsing/chunk_extractor.hpp"
+
+#include "support/utils.hpp"
 
 #ifdef ULTRACODE_USE_TREESITTER
-#  include "ts_extractor.hpp"
+#  include "parsing/ts_extractor.hpp"
 #endif
 
 #include <algorithm>

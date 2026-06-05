@@ -1,7 +1,8 @@
-#include "retriever.hpp"
-#include "index_store.hpp"
-#include "ollama_client.hpp"
-#include "utils.hpp"
+#include "retrieval/retriever.hpp"
+
+#include "index/index_store.hpp"
+#include "llm/ollama_client.hpp"
+#include "support/utils.hpp"
 
 #include <algorithm>
 #include <cmath>

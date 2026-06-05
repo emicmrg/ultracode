@@ -7,7 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 # ── Tree-sitter (optional) ────────────────────────────────────────────────────
-option(ULTRACODE_USE_TREESITTER "Enable Tree-sitter based parsing" ON)
+option(ULTRACODE_USE_TREESITTER "Enable Tree-sitter based parsing" OFF)
 
 if(ULTRACODE_USE_TREESITTER)
     include(FetchContent)
@@ -93,7 +93,7 @@ if(ULTRACODE_USE_TREESITTER)
     )
     set_target_properties(ts_grammar_typescript PROPERTIES C_STANDARD 99)
 
-    set(ULTRACODE_TS_SOURCES src/ts_extractor.cpp)
+    set(ULTRACODE_TS_SOURCES src/parsing/ts_extractor.cpp)
     set(ULTRACODE_TS_LIBS
         ts_runtime
         ts_grammar_c
@@ -107,17 +107,20 @@ endif()
 
 # ── Shared library sources ────────────────────────────────────────────────────
 set(ULTRACODE_LIB_SOURCES
-    src/config.cpp
-    src/chunk_extractor.cpp
-    src/ollama_client.cpp
-    src/repo_scanner.cpp
-    src/index_store.cpp
-    src/retriever.cpp
+    src/app/application.cpp
+    src/app/config.cpp
+    src/cli/command_router.cpp
+    src/index/index_store.cpp
+    src/index/repo_scanner.cpp
+    src/llm/ollama_client.cpp
+    src/parsing/chunk_extractor.cpp
+    src/retrieval/retriever.cpp
     ${ULTRACODE_TS_SOURCES}
 )
 
 # ── Main executable ───────────────────────────────────────────────────────────
 add_executable(ultracode src/main.cpp ${ULTRACODE_LIB_SOURCES})
+target_include_directories(ultracode PRIVATE src)
 target_compile_options(ultracode PRIVATE
     $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -pedantic>
     $<$<CXX_COMPILER_ID:MSVC>:/W4>
@@ -132,6 +135,7 @@ endif()
 enable_testing()
 
 add_executable(test_chunking tests/test_chunking.cpp ${ULTRACODE_LIB_SOURCES})
+target_include_directories(test_chunking PRIVATE src)
 target_compile_options(test_chunking PRIVATE
     $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -pedantic>
     $<$<CXX_COMPILER_ID:MSVC>:/W4>
@@ -141,4 +145,4 @@ if(ULTRACODE_USE_TREESITTER)
     target_include_directories(test_chunking PRIVATE ${ULTRACODE_TS_INCLUDE_DIRS})
     target_link_libraries(test_chunking PRIVATE ${ULTRACODE_TS_LIBS})
 endif()
-add_test(NAME test_chunking COMMAND test_chunking)
+add_test(NAME test_chunking COMMAND $<TARGET_FILE:test_chunking>)

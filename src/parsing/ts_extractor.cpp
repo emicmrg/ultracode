@@ -1,5 +1,6 @@
-#include "ts_extractor.hpp"
-#include "utils.hpp"
+#include "parsing/ts_extractor.hpp"
+
+#include "support/utils.hpp"
 
 #include <cstring>
 #include <tree_sitter/api.h>

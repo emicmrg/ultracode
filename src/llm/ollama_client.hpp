@@ -1,6 +1,6 @@
 #pragma once
 
-#include "config.hpp"
+#include "app/config.hpp"
 
 #include <string>
 #include <vector>

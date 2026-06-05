@@ -1,6 +1,8 @@
-#include "index_store.hpp"
-#include "config.hpp"
-#include "utils.hpp"
+#include "index/index_store.hpp"
+
+#include "app/config.hpp"
+#include "parsing/chunk.hpp"
+#include "support/utils.hpp"
 
 #include <filesystem>
 #include <iomanip>

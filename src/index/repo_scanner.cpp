@@ -1,5 +1,6 @@
-#include "repo_scanner.hpp"
-#include "chunk_extractor.hpp"
+#include "index/repo_scanner.hpp"
+
+#include "parsing/chunk_extractor.hpp"
 
 #include <filesystem>
 #include <system_error>

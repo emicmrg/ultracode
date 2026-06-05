@@ -1,5 +1,5 @@
-#include "../src/chunk_extractor.hpp"
-#include "../src/utils.hpp"
+#include "parsing/chunk_extractor.hpp"
+#include "support/utils.hpp"
 
 #include <cassert>
 #include <filesystem>

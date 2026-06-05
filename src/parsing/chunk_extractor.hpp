@@ -1,6 +1,6 @@
 #pragma once
 
-#include "chunk.hpp"
+#include "parsing/chunk.hpp"
 
 #include <filesystem>
 #include <memory>

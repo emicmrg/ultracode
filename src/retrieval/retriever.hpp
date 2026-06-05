@@ -1,7 +1,7 @@
 #pragma once
 
-#include "chunk.hpp"
-#include "config.hpp"
+#include "app/config.hpp"
+#include "parsing/chunk.hpp"
 
 #include <filesystem>
 #include <string>

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "chunk_extractor.hpp"
+#include "parsing/chunk_extractor.hpp"
 
 // Tree-sitter based extractor.
 // Supports: cpp (C and C++), go, python, typescript / javascript.

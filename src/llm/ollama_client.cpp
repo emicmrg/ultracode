@@ -1,5 +1,6 @@
-#include "ollama_client.hpp"
-#include "utils.hpp"
+#include "llm/ollama_client.hpp"
+
+#include "support/utils.hpp"
 
 #include <utility>
 
