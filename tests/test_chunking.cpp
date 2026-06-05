@@ -1,7 +1,10 @@
+#include "app/application.hpp"
+#include "index/index_store.hpp"
 #include "parsing/chunk_extractor.hpp"
 #include "support/utils.hpp"
 
 #include <cassert>
+#include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <string>
@@ -92,6 +95,61 @@ static void test_detect_language() {
     std::cout << "PASS: detect_language\n";
 }
 
+static fs::path make_temp_repo() {
+    const auto unique = "ultracode-index-test-" + std::to_string(std::rand());
+    const fs::path dest = fs::temp_directory_path() / unique;
+    fs::copy(fixture_dir(), dest, fs::copy_options::recursive);
+    return dest;
+}
+
+static void test_incremental_indexing() {
+    const fs::path repo = make_temp_repo();
+    const CommandRequest init_request{"init", {}};
+    const CommandRequest index_request{"index", {}};
+
+    assert(run_command(repo, init_request) == 0);
+    assert(run_command(repo, index_request) == 0);
+
+    auto state = load_file_index_state(repo);
+    auto summary = load_index_run_summary(repo);
+    assert(summary.has_value());
+    assert(state.size() == 5);
+    assert(summary->new_files == 5);
+    assert(summary->reused_files == 0);
+
+    assert(run_command(repo, index_request) == 0);
+    summary = load_index_run_summary(repo);
+    assert(summary.has_value());
+    assert(summary->reused_files == 5);
+    assert(summary->changed_files == 0);
+
+    const fs::path python_file = repo / "hello.py";
+    write_text(python_file, slurp(python_file) + "\n\ndef added_after_index():\n    return True\n");
+    assert(run_command(repo, index_request) == 0);
+    summary = load_index_run_summary(repo);
+    assert(summary.has_value());
+    assert(summary->changed_files == 1);
+    assert(summary->reused_files == 4);
+
+    fs::remove(repo / "README.md");
+    assert(run_command(repo, index_request) == 0);
+    summary = load_index_run_summary(repo);
+    assert(summary.has_value());
+    assert(summary->deleted_files == 1);
+
+    state = load_file_index_state(repo);
+    bool found_readme = false;
+    for (const auto& record : state) {
+        if (record.path == "README.md") {
+            found_readme = true;
+        }
+    }
+    assert(!found_readme);
+
+    fs::remove_all(repo);
+    std::cout << "PASS: incremental indexing\n";
+}
+
 int main() {
     test_detect_language();
     test_cpp_chunking();
@@ -99,6 +157,7 @@ int main() {
     test_go_chunking();
     test_ts_chunking();
     test_markdown_chunking();
+    test_incremental_indexing();
     std::cout << "All tests passed.\n";
     return 0;
 }

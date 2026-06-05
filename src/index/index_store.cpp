@@ -6,6 +6,7 @@
 
 #include <filesystem>
 #include <iomanip>
+#include <optional>
 #include <sstream>
 
 namespace fs = std::filesystem;
@@ -43,6 +44,27 @@ static std::string escape_tsv(std::string s) {
     return s;
 }
 
+static std::vector<std::string> split(const std::string& text, char delim) {
+    std::vector<std::string> parts;
+    std::stringstream ss(text);
+    std::string item;
+    while (std::getline(ss, item, delim)) {
+        parts.push_back(item);
+    }
+    return parts;
+}
+
+static std::string join_strings(const std::vector<std::string>& values, char delim) {
+    std::ostringstream ss;
+    for (size_t i = 0; i < values.size(); ++i) {
+        if (i) {
+            ss << delim;
+        }
+        ss << values[i];
+    }
+    return ss.str();
+}
+
 bool write_manifest(const fs::path& root, const std::vector<Chunk>& chunks) {
     std::ostringstream ss;
     ss << "id\tpath\tlanguage\tsymbol\tstart_line\tend_line\thash\n";
@@ -76,6 +98,104 @@ std::vector<Chunk> load_manifest(const fs::path& root) {
         chunks.push_back(c);
     }
     return chunks;
+}
+
+bool write_file_index_state(const fs::path& root,
+                            const std::vector<FileIndexRecord>& records) {
+    std::ostringstream ss;
+    ss << "path\tcontent_hash\tchunk_ids\n";
+    for (const auto& record : records) {
+        ss << escape_tsv(record.path) << '\t'
+           << record.content_hash << '\t'
+           << join_strings(record.chunk_ids, ',') << '\n';
+    }
+    return write_text(root / ".ultracode" / "files.tsv", ss.str());
+}
+
+std::vector<FileIndexRecord> load_file_index_state(const fs::path& root) {
+    std::vector<FileIndexRecord> records;
+    std::stringstream ss(slurp(root / ".ultracode" / "files.tsv"));
+    std::string line;
+    std::getline(ss, line);
+    while (std::getline(ss, line)) {
+        if (line.empty()) {
+            continue;
+        }
+        std::vector<std::string> fields;
+        std::stringstream ls(line);
+        std::string field;
+        while (std::getline(ls, field, '\t')) {
+            fields.push_back(field);
+        }
+        if (fields.size() < 3) {
+            continue;
+        }
+        FileIndexRecord record;
+        record.path = fields[0];
+        record.content_hash = fields[1];
+        if (!fields[2].empty()) {
+            record.chunk_ids = split(fields[2], ',');
+        }
+        records.push_back(record);
+    }
+    return records;
+}
+
+bool write_index_run_summary(const fs::path& root,
+                             const IndexRunSummary& summary) {
+    std::ostringstream ss;
+    ss << "scanned_files\tnew_files\tchanged_files\treused_files\tdeleted_files\t"
+       << "total_chunks\treused_chunks\tollama_vectors\tfallback_vectors\n";
+    ss << summary.scanned_files << '\t'
+       << summary.new_files << '\t'
+       << summary.changed_files << '\t'
+       << summary.reused_files << '\t'
+       << summary.deleted_files << '\t'
+       << summary.total_chunks << '\t'
+       << summary.reused_chunks << '\t'
+       << summary.ollama_vectors << '\t'
+       << summary.fallback_vectors << '\n';
+    return write_text(root / ".ultracode" / "index_stats.tsv", ss.str());
+}
+
+std::optional<IndexRunSummary> load_index_run_summary(const fs::path& root) {
+    std::stringstream ss(slurp(root / ".ultracode" / "index_stats.tsv"));
+    std::string header;
+    std::string line;
+    if (!std::getline(ss, header) || !std::getline(ss, line)) {
+        return std::nullopt;
+    }
+
+    std::vector<std::string> fields;
+    std::stringstream ls(line);
+    std::string field;
+    while (std::getline(ls, field, '\t')) {
+        fields.push_back(field);
+    }
+    if (fields.size() < 9) {
+        return std::nullopt;
+    }
+
+    IndexRunSummary summary;
+    summary.scanned_files = std::stoi(fields[0]);
+    summary.new_files = std::stoi(fields[1]);
+    summary.changed_files = std::stoi(fields[2]);
+    summary.reused_files = std::stoi(fields[3]);
+    summary.deleted_files = std::stoi(fields[4]);
+    summary.total_chunks = std::stoi(fields[5]);
+    summary.reused_chunks = std::stoi(fields[6]);
+    summary.ollama_vectors = std::stoi(fields[7]);
+    summary.fallback_vectors = std::stoi(fields[8]);
+    return summary;
+}
+
+void remove_chunk_artifacts(const fs::path& root,
+                            const std::vector<std::string>& chunk_ids) {
+    for (const auto& id : chunk_ids) {
+        std::error_code ec;
+        fs::remove(chunk_path(root, id), ec);
+        fs::remove(vector_path(root, id), ec);
+    }
 }
 
 void ensure_workspace(const fs::path& root) {

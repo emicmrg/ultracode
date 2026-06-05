@@ -12,6 +12,7 @@
 #include <iomanip>
 #include <iostream>
 #include <map>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -30,35 +31,106 @@ int cmd_index(const fs::path& root) {
     ensure_workspace(root);
     const Config cfg = load_config(root);
     const OllamaClient ollama(cfg);
+    const auto previous_records = load_file_index_state(root);
+    const auto previous_chunks = load_manifest(root);
+    std::map<std::string, FileIndexRecord> previous_by_path;
+    std::map<std::string, Chunk> previous_chunks_by_id;
+    for (const auto& record : previous_records) {
+        previous_by_path[record.path] = record;
+    }
+    for (const auto& chunk : previous_chunks) {
+        previous_chunks_by_id[chunk.id] = chunk;
+    }
+
     std::vector<Chunk> all_chunks;
-    int ollama_vectors = 0;
-    int fallback_vectors = 0;
+    std::vector<FileIndexRecord> next_records;
+    std::set<std::string> seen_paths;
+    IndexRunSummary summary;
 
     const auto files = scan_repo(root, cfg);
+    summary.scanned_files = static_cast<int>(files.size());
     for (const auto& file : files) {
-        for (auto& c : extract_chunks(root, file)) {
-            std::string content = join_lines(split_lines(slurp(root / c.path)),
+        const std::string rel = fs::relative(file, root).generic_string();
+        seen_paths.insert(rel);
+        const std::string file_content = slurp(file);
+        const std::string file_hash = fnv1a_hex(file_content);
+
+        auto previous_it = previous_by_path.find(rel);
+        if (previous_it != previous_by_path.end() &&
+            previous_it->second.content_hash == file_hash) {
+            ++summary.reused_files;
+            summary.reused_chunks += static_cast<int>(previous_it->second.chunk_ids.size());
+            for (const auto& chunk_id : previous_it->second.chunk_ids) {
+                auto chunk_it = previous_chunks_by_id.find(chunk_id);
+                if (chunk_it != previous_chunks_by_id.end()) {
+                    all_chunks.push_back(chunk_it->second);
+                }
+            }
+            next_records.push_back(previous_it->second);
+            continue;
+        }
+
+        if (previous_it == previous_by_path.end()) {
+            ++summary.new_files;
+        } else {
+            ++summary.changed_files;
+        }
+
+        auto chunks = extract_chunks(root, file);
+        std::vector<std::string> new_chunk_ids;
+        std::set<std::string> new_chunk_set;
+        for (auto& c : chunks) {
+            std::string content = join_lines(split_lines(file_content),
                                              c.start_line, c.end_line);
             write_text(chunk_path(root, c.id), content);
             const fs::path vp = vector_path(root, c.id);
             if (!fs::exists(vp)) {
                 std::vector<float> v = ollama.embed(content);
                 if (!v.empty()) {
-                    ++ollama_vectors;
+                    ++summary.ollama_vectors;
                 } else {
                     v = hashed_embedding(content, cfg.fallback_embedding_dim);
-                    ++fallback_vectors;
+                    ++summary.fallback_vectors;
                 }
                 save_vector(vp, v);
             }
+            new_chunk_ids.push_back(c.id);
+            new_chunk_set.insert(c.id);
             all_chunks.push_back(c);
+        }
+
+        if (previous_it != previous_by_path.end()) {
+            std::vector<std::string> orphaned_ids;
+            for (const auto& old_id : previous_it->second.chunk_ids) {
+                if (!new_chunk_set.count(old_id)) {
+                    orphaned_ids.push_back(old_id);
+                }
+            }
+            remove_chunk_artifacts(root, orphaned_ids);
+        }
+
+        next_records.push_back(FileIndexRecord{rel, file_hash, new_chunk_ids});
+    }
+
+    for (const auto& record : previous_records) {
+        if (!seen_paths.count(record.path)) {
+            ++summary.deleted_files;
+            remove_chunk_artifacts(root, record.chunk_ids);
         }
     }
 
     write_manifest(root, all_chunks);
+    write_file_index_state(root, next_records);
+    summary.total_chunks = static_cast<int>(all_chunks.size());
+    write_index_run_summary(root, summary);
+
     std::cout << "Indexed " << files.size() << " files and " << all_chunks.size() << " chunks.\n";
-    std::cout << "New vectors: " << ollama_vectors << " from Ollama, "
-              << fallback_vectors << " local fallback.\n";
+    std::cout << "Files: " << summary.new_files << " new, "
+              << summary.changed_files << " changed, "
+              << summary.reused_files << " reused, "
+              << summary.deleted_files << " deleted.\n";
+    std::cout << "Vectors: " << summary.ollama_vectors << " from Ollama, "
+              << summary.fallback_vectors << " local fallback.\n";
     return 0;
 }
 
@@ -72,6 +144,15 @@ int cmd_stats(const fs::path& root) {
     std::cout << "Chunks: " << chunks.size() << '\n';
     for (const auto& [lang, count] : by_lang) {
         std::cout << "  " << lang << ": " << count << '\n';
+    }
+    if (const auto summary = load_index_run_summary(root)) {
+        std::cout << "Last index run:\n"
+                  << "  scanned: " << summary->scanned_files << '\n'
+                  << "  new: " << summary->new_files << '\n'
+                  << "  changed: " << summary->changed_files << '\n'
+                  << "  reused: " << summary->reused_files << '\n'
+                  << "  deleted: " << summary->deleted_files << '\n'
+                  << "  reused chunks: " << summary->reused_chunks << '\n';
     }
     return 0;
 }
