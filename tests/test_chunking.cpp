@@ -110,8 +110,8 @@ static fs::path make_temp_repo() {
 
 static void test_incremental_indexing() {
     const fs::path repo = make_temp_repo();
-    const CommandRequest init_request{"init", "", {}};
-    const CommandRequest index_request{"index", "", {}};
+    const CommandRequest init_request{"init", "", false, {}};
+    const CommandRequest index_request{"index", "", false, {}};
 
     assert(run_command(repo, init_request) == 0);
     assert(run_command(repo, index_request) == 0);
@@ -178,7 +178,7 @@ static void test_vector_store_roundtrip() {
 
 static void test_chat_session_commands() {
     const fs::path repo = make_temp_repo();
-    const CommandRequest init_request{"init", "", {}};
+    const CommandRequest init_request{"init", "", false, {}};
     assert(run_command(repo, init_request) == 0);
 
     Config cfg = load_config(repo);
@@ -311,15 +311,17 @@ static void test_command_router_file_target() {
     const char* argv[] = {
         "ultracode",
         "patch",
+        "--debug",
         "--file",
         "src/lib/catalog.ts",
         "agrega",
         "10",
         "comidas"
     };
-    auto request = parse_command_request(7, const_cast<char**>(argv));
+    auto request = parse_command_request(8, const_cast<char**>(argv));
     assert(request.has_value());
     assert(request->name == "patch");
+    assert(request->debug);
     assert(request->file_target == "src/lib/catalog.ts");
     assert(request->args.size() == 1);
     assert(request->args[0] == "agrega 10 comidas");

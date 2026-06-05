@@ -7,6 +7,7 @@
 struct CommandRequest {
     std::string name;
     std::string file_target;
+    bool debug = false;
     std::vector<std::string> args;
 };
 

@@ -12,6 +12,7 @@
 #include "vcs/git_diff.hpp"
 
 #include <filesystem>
+#include <chrono>
 #include <iomanip>
 #include <iostream>
 #include <map>
@@ -28,6 +29,53 @@ struct ChunkEmbeddingRequest {
     Chunk chunk;
     std::string content;
 };
+
+struct PatchDebugInfo {
+    fs::path dir;
+    std::string retrieval_text;
+    int context_chars_total = 0;
+    int target_file_chars = 0;
+    int git_diff_chars = 0;
+    int model_output_chars = 0;
+    int sanitized_patch_chars = 0;
+};
+
+fs::path debug_root_dir(const fs::path& root) {
+    return root / ".ultracode" / "debug";
+}
+
+PatchDebugInfo create_patch_debug_session(const fs::path& root) {
+    fs::create_directories(debug_root_dir(root));
+    const auto now = std::chrono::system_clock::now().time_since_epoch().count();
+    const fs::path dir = debug_root_dir(root) / ("patch-" + std::to_string(now));
+    fs::create_directories(dir);
+    PatchDebugInfo debug;
+    debug.dir = dir;
+    return debug;
+}
+
+void flush_patch_debug(const PatchDebugInfo& debug,
+                       const std::string& prompt,
+                       const std::string& raw_model_output,
+                       const std::string& sanitized_patch,
+                       const std::string& validation_text) {
+    if (debug.dir.empty()) {
+        return;
+    }
+    write_text(debug.dir / "prompt.txt", prompt);
+    write_text(debug.dir / "model_output.txt", raw_model_output);
+    write_text(debug.dir / "sanitized_patch.diff", sanitized_patch);
+    write_text(debug.dir / "retrieval.txt", debug.retrieval_text);
+
+    std::ostringstream summary;
+    summary << "context_chars_total=" << debug.context_chars_total << '\n'
+            << "target_file_chars=" << debug.target_file_chars << '\n'
+            << "git_diff_chars=" << debug.git_diff_chars << '\n'
+            << "model_output_chars=" << debug.model_output_chars << '\n'
+            << "sanitized_patch_chars=" << debug.sanitized_patch_chars << '\n'
+            << validation_text << '\n';
+    write_text(debug.dir / "validation.txt", summary.str());
+}
 
 std::string normalize_repo_relative_path(const fs::path& root, const std::string& file_target) {
     if (file_target.empty()) {
@@ -359,10 +407,12 @@ int cmd_ask(const fs::path& root,
 
 int cmd_patch(const fs::path& root,
               const std::string& instruction,
-              const std::string& file_target) {
+              const std::string& file_target,
+              bool debug_enabled) {
     ensure_workspace(root);
     const Config cfg = load_config(root);
     const auto diff_context = load_repo_diff_context(root, cfg.max_context_chars / 3);
+    PatchDebugInfo debug = debug_enabled ? create_patch_debug_session(root) : PatchDebugInfo{};
     std::string normalized_file_target;
     if (!file_target.empty() && !validate_file_target(root, file_target, &normalized_file_target)) {
         std::cerr << "Could not read file target: " << file_target << '\n';
@@ -376,8 +426,14 @@ int cmd_patch(const fs::path& root,
     if (!file_block.empty()) {
         ctx << file_block;
         used += static_cast<int>(file_block.size());
+        debug.target_file_chars = static_cast<int>(file_block.size());
     }
+    std::ostringstream retrieval_log;
     for (const auto& r : ranked) {
+        retrieval_log << r.chunk.path << ":" << r.chunk.start_line << "-" << r.chunk.end_line
+                      << " score=" << std::fixed << std::setprecision(3) << r.score
+                      << " vec=" << r.vector_score
+                      << " lex=" << r.lexical_score << '\n';
         std::ostringstream block;
         block << "<chunk path=\"" << r.chunk.path << "\" lines=\""
               << r.chunk.start_line << "-" << r.chunk.end_line
@@ -390,6 +446,9 @@ int cmd_patch(const fs::path& root,
         ctx << rendered;
         used += static_cast<int>(rendered.size());
     }
+    debug.retrieval_text = retrieval_log.str();
+    debug.context_chars_total = used;
+    debug.git_diff_chars = static_cast<int>(diff_context.diff_text.size());
 
     const std::string system =
         "You are a local coding assistant. Return only a complete unified diff patch. "
@@ -410,21 +469,51 @@ int cmd_patch(const fs::path& root,
     if (!diff_context.diff_text.empty()) {
         user += "\nWorking tree diff:\n" + diff_context.diff_text;
     }
+    const std::string full_prompt = "SYSTEM:\n" + system + "\n\nUSER:\n" + user;
     const OllamaClient ollama(cfg);
-    const std::string diff_text = sanitize_patch_text(ollama.chat(system, user));
+    const std::string raw_model_output = ollama.chat(system, user);
+    const std::string diff_text = sanitize_patch_text(raw_model_output);
+    debug.model_output_chars = static_cast<int>(raw_model_output.size());
+    debug.sanitized_patch_chars = static_cast<int>(diff_text.size());
     std::string patch_error;
     if (!validate_patch_text(root, diff_text, &patch_error)) {
+        flush_patch_debug(
+            debug,
+            full_prompt,
+            raw_model_output,
+            diff_text,
+            "result=invalid\nerror=" + patch_error);
         std::cerr << "Model returned an invalid patch: " << patch_error
-                  << ". Patch proposal was not saved.\n";
+                  << ". Patch proposal was not saved.";
+        if (!debug.dir.empty()) {
+            std::cerr << " Debug artifacts: " << debug.dir;
+        }
+        std::cerr << '\n';
         return 1;
     }
     const auto target_paths = extract_patch_target_paths(diff_text);
     const PatchProposal proposal = save_patch_proposal(root, instruction, diff_text, target_paths);
+    std::ostringstream target_paths_text;
+    for (size_t i = 0; i < target_paths.size(); ++i) {
+        if (i) {
+            target_paths_text << '\n';
+        }
+        target_paths_text << target_paths[i];
+    }
+    flush_patch_debug(
+        debug,
+        full_prompt,
+        raw_model_output,
+        diff_text,
+        "result=valid\npatch_id=" + proposal.id + "\ntarget_paths=" + target_paths_text.str());
 
     std::cout << "Saved patch proposal " << proposal.id
               << " targeting " << proposal.target_paths.size() << " file(s).\n";
     for (const auto& path : proposal.target_paths) {
         std::cout << "- " << path << '\n';
+    }
+    if (!debug.dir.empty()) {
+        std::cout << "Debug artifacts: " << debug.dir << '\n';
     }
     return 0;
 }
@@ -483,7 +572,7 @@ int run_command(const fs::path& root, const CommandRequest& request) {
             std::cerr << "Missing patch instruction.\n";
             return 1;
         }
-        return cmd_patch(root, request.args.front(), request.file_target);
+        return cmd_patch(root, request.args.front(), request.file_target, request.debug);
     }
     if (request.name == "apply") {
         if (request.args.empty() || request.args.front().empty()) {

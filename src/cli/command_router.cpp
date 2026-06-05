@@ -26,10 +26,21 @@ std::optional<CommandRequest> parse_command_request(int argc, char** argv) {
     CommandRequest request;
     request.name = argv[1];
     int arg_start = 2;
-    if ((request.name == "search" || request.name == "ask" || request.name == "patch") &&
-        argc >= 4 && std::string(argv[2]) == "--file") {
-        request.file_target = argv[3];
-        arg_start = 4;
+    if (request.name == "search" || request.name == "ask" || request.name == "patch") {
+        while (arg_start < argc) {
+            const std::string flag = argv[arg_start];
+            if (flag == "--debug") {
+                request.debug = true;
+                ++arg_start;
+                continue;
+            }
+            if (flag == "--file" && arg_start + 1 < argc) {
+                request.file_target = argv[arg_start + 1];
+                arg_start += 2;
+                continue;
+            }
+            break;
+        }
     }
 
     if (request.name == "search" || request.name == "ask" || request.name == "patch") {
@@ -46,10 +57,10 @@ void print_help(std::ostream& out) {
         << "  ultracode init\n"
         << "  ultracode index\n"
         << "  ultracode stats\n"
-        << "  ultracode search [--file <path>] <query>\n"
-        << "  ultracode ask [--file <path>] <question>\n"
+        << "  ultracode search [--debug] [--file <path>] <query>\n"
+        << "  ultracode ask [--debug] [--file <path>] <question>\n"
         << "  ultracode chat\n"
-        << "  ultracode patch [--file <path>] <instruction>\n"
+        << "  ultracode patch [--debug] [--file <path>] <instruction>\n"
         << "  ultracode apply <patch-id>\n"
         << "  ultracode reject <patch-id>\n"
         << "  ultracode explain <file>\n";
