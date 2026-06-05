@@ -1,6 +1,10 @@
 #include "chunk_extractor.hpp"
 #include "utils.hpp"
 
+#ifdef ULTRACODE_USE_TREESITTER
+#  include "ts_extractor.hpp"
+#endif
+
 #include <algorithm>
 #include <regex>
 
@@ -25,7 +29,7 @@ std::string detect_language(const fs::path& path) {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Shared helpers
+// Heuristic helpers (internal)
 // ──────────────────────────────────────────────────────────────────────────────
 
 static std::vector<Chunk> chunk_by_lines(const std::vector<std::string>& lines,
@@ -67,10 +71,6 @@ static int find_brace_block_end(const std::vector<std::string>& lines,
     }
     return end;
 }
-
-// ──────────────────────────────────────────────────────────────────────────────
-// C / C++ / JavaScript / TypeScript heuristic extractor
-// ──────────────────────────────────────────────────────────────────────────────
 
 static std::vector<Chunk> extract_cpp_like(const std::vector<std::string>& lines,
                                             const std::string& path,
@@ -115,10 +115,6 @@ static std::vector<Chunk> extract_cpp_like(const std::vector<std::string>& lines
     return chunks;
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Go heuristic extractor
-// ──────────────────────────────────────────────────────────────────────────────
-
 static std::vector<Chunk> extract_go(const std::vector<std::string>& lines,
                                       const std::string& path) {
     std::vector<Chunk> chunks;
@@ -151,10 +147,6 @@ static std::vector<Chunk> extract_go(const std::vector<std::string>& lines,
     if (chunks.empty()) return chunk_by_lines(lines, path, "go");
     return chunks;
 }
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Python heuristic extractor
-// ──────────────────────────────────────────────────────────────────────────────
 
 static int indentation(const std::string& line) {
     int n = 0;
@@ -198,10 +190,6 @@ static std::vector<Chunk> extract_python(const std::vector<std::string>& lines,
     return chunks;
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Markdown heuristic extractor
-// ──────────────────────────────────────────────────────────────────────────────
-
 static std::vector<Chunk> extract_markdown(const std::vector<std::string>& lines,
                                             const std::string& path) {
     std::vector<Chunk> chunks;
@@ -234,19 +222,42 @@ static std::vector<Chunk> extract_markdown(const std::vector<std::string>& lines
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
+// HeuristicExtractor implementation
+// ──────────────────────────────────────────────────────────────────────────────
+
+bool HeuristicExtractor::supports(const std::string& /*language*/) const {
+    return true; // handles every language as a last resort
+}
+
+std::vector<Chunk> HeuristicExtractor::extract(const std::string& content,
+                                                 const std::string& path,
+                                                 const std::string& language) const {
+    const auto lines = split_lines(content);
+    if (language == "cpp" || language == "javascript" || language == "typescript")
+        return extract_cpp_like(lines, path, language);
+    if (language == "go")       return extract_go(lines, path);
+    if (language == "python")   return extract_python(lines, path);
+    if (language == "markdown") return extract_markdown(lines, path);
+    return chunk_by_lines(lines, path, language.empty() ? "text" : language);
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
 // Public entry point
 // ──────────────────────────────────────────────────────────────────────────────
 
 std::vector<Chunk> extract_chunks(const fs::path& root, const fs::path& file) {
-    const std::string rel  = fs::relative(file, root).generic_string();
-    const std::string lang = detect_language(file);
-    const std::string text = slurp(file);
-    const auto lines       = split_lines(text);
+    const std::string rel     = fs::relative(file, root).generic_string();
+    const std::string lang    = detect_language(file);
+    const std::string content = slurp(file);
 
-    if (lang == "cpp" || lang == "javascript" || lang == "typescript")
-        return extract_cpp_like(lines, rel, lang);
-    if (lang == "go")       return extract_go(lines, rel);
-    if (lang == "python")   return extract_python(lines, rel);
-    if (lang == "markdown") return extract_markdown(lines, rel);
-    return chunk_by_lines(lines, rel, lang.empty() ? "text" : lang);
+#ifdef ULTRACODE_USE_TREESITTER
+    TreeSitterExtractor ts;
+    if (ts.supports(lang)) {
+        auto chunks = ts.extract(content, rel, lang);
+        if (!chunks.empty()) return chunks;
+    }
+#endif
+
+    HeuristicExtractor h;
+    return h.extract(content, rel, lang);
 }
