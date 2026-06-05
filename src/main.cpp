@@ -1,22 +1,19 @@
 #include <algorithm>
 #include <array>
-#include <cerrno>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
-#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <map>
-#include <numeric>
 #include <optional>
 #include <regex>
 #include <sstream>
 #include <string>
-#include <unordered_map>
-#include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -96,7 +93,6 @@ static std::vector<std::string> split_lines(const std::string& text) {
     std::stringstream ss(text);
     std::string line;
     while (std::getline(ss, line)) lines.push_back(line);
-    if (!text.empty() && text.back() == '\n') return lines;
     return lines;
 }
 
@@ -109,22 +105,22 @@ static std::string join_lines(const std::vector<std::string>& lines, int start_o
 }
 
 static std::string json_escape(const std::string& s) {
-    std::ostringstream o;
+    std::ostringstream out;
     for (unsigned char c : s) {
         switch (c) {
-            case '\\': o << "\\\\"; break;
-            case '"': o << "\\\""; break;
-            case '\b': o << "\\b"; break;
-            case '\f': o << "\\f"; break;
-            case '\n': o << "\\n"; break;
-            case '\r': o << "\\r"; break;
-            case '\t': o << "\\t"; break;
+            case '\\': out << "\\\\"; break;
+            case '"': out << "\\\""; break;
+            case '\b': out << "\\b"; break;
+            case '\f': out << "\\f"; break;
+            case '\n': out << "\\n"; break;
+            case '\r': out << "\\r"; break;
+            case '\t': out << "\\t"; break;
             default:
-                if (c < 0x20) o << "\\u" << std::hex << std::setw(4) << std::setfill('0') << static_cast<int>(c);
-                else o << c;
+                if (c < 0x20) out << "\\u" << std::hex << std::setw(4) << std::setfill('0') << static_cast<int>(c);
+                else out << c;
         }
     }
-    return o.str();
+    return out.str();
 }
 
 static std::string shell_quote(const std::string& s) {
@@ -179,16 +175,17 @@ static std::string unescape_json_string(const std::string& s) {
 }
 
 static std::optional<std::string> extract_json_string_after_key(const std::string& json, const std::string& key) {
-    size_t key_pos = json.find(key);
+    const size_t key_pos = json.find(key);
     if (key_pos == std::string::npos) return std::nullopt;
-    size_t colon = json.find(':', key_pos + key.size());
+    const size_t colon = json.find(':', key_pos + key.size());
     if (colon == std::string::npos) return std::nullopt;
-    size_t first_quote = json.find('"', colon + 1);
+    const size_t first_quote = json.find('"', colon + 1);
     if (first_quote == std::string::npos) return std::nullopt;
+
     std::string value;
     bool escaped = false;
     for (size_t i = first_quote + 1; i < json.size(); ++i) {
-        char c = json[i];
+        const char c = json[i];
         if (escaped) {
             value += '\\';
             value += c;
@@ -223,9 +220,9 @@ static std::vector<float> hashed_embedding(const std::string& text, int dim) {
     std::vector<float> v(static_cast<size_t>(dim), 0.0f);
     for (const auto& token : tokenize(text)) {
         const std::string h = fnv1a_hex(token);
-        uint64_t n = std::stoull(h.substr(0, 16), nullptr, 16);
-        size_t idx = static_cast<size_t>(n % static_cast<uint64_t>(dim));
-        float sign = ((n >> 63) & 1u) ? -1.0f : 1.0f;
+        const uint64_t n = std::stoull(h.substr(0, 16), nullptr, 16);
+        const size_t idx = static_cast<size_t>(n % static_cast<uint64_t>(dim));
+        const float sign = ((n >> 63) & 1u) ? -1.0f : 1.0f;
         v[idx] += sign;
     }
     double norm = 0.0;
@@ -236,14 +233,15 @@ static std::vector<float> hashed_embedding(const std::string& text, int dim) {
 }
 
 static std::vector<float> parse_first_embedding(const std::string& json) {
-    size_t key = json.find("\"embeddings\"");
+    const size_t key = json.find("\"embeddings\"");
     if (key == std::string::npos) return {};
-    size_t outer = json.find('[', key);
+    const size_t outer = json.find('[', key);
     if (outer == std::string::npos) return {};
-    size_t inner = json.find('[', outer + 1);
+    const size_t inner = json.find('[', outer + 1);
     if (inner == std::string::npos) return {};
-    size_t end = json.find(']', inner + 1);
+    const size_t end = json.find(']', inner + 1);
     if (end == std::string::npos) return {};
+
     std::string body = json.substr(inner + 1, end - inner - 1);
     std::vector<float> values;
     std::stringstream ss(body);
@@ -262,22 +260,22 @@ public:
     explicit OllamaClient(Config config) : config_(std::move(config)) {}
 
     std::vector<float> embed(const std::string& input) const {
-        std::string payload = "{\"model\":\"" + json_escape(config_.embedding_model) +
+        const std::string payload = "{\"model\":\"" + json_escape(config_.embedding_model) +
             "\",\"input\":\"" + json_escape(input) + "\",\"keep_alive\":\"1m\"}";
-        std::string cmd = "curl -sS --max-time 180 -H 'Content-Type: application/json' " +
+        const std::string cmd = "curl -sS --max-time 180 -H 'Content-Type: application/json' " +
             shell_quote(config_.ollama_url + "/api/embed") + " -d " + shell_quote(payload) + " 2>/dev/null";
         return parse_first_embedding(run_command_capture(cmd));
     }
 
     std::string chat(const std::string& system, const std::string& user) const {
-        std::string payload =
+        const std::string payload =
             "{\"model\":\"" + json_escape(config_.chat_model) +
             "\",\"stream\":false,\"keep_alive\":\"10m\",\"messages\":[" +
             "{\"role\":\"system\",\"content\":\"" + json_escape(system) + "\"}," +
             "{\"role\":\"user\",\"content\":\"" + json_escape(user) + "\"}]}";
-        std::string cmd = "curl -sS --max-time 300 -H 'Content-Type: application/json' " +
+        const std::string cmd = "curl -sS --max-time 300 -H 'Content-Type: application/json' " +
             shell_quote(config_.ollama_url + "/api/chat") + " -d " + shell_quote(payload) + " 2>/dev/null";
-        std::string response = run_command_capture(cmd);
+        const std::string response = run_command_capture(cmd);
         auto content = extract_json_string_after_key(response, "\"content\"");
         return content.value_or(response);
     }
@@ -286,9 +284,22 @@ private:
     Config config_;
 };
 
+static std::string default_config_json() {
+    return R"JSON({
+  "ollama_url": "http://127.0.0.1:11434",
+  "embedding_model": "nomic-embed-text",
+  "chat_model": "qwen2.5-coder:3b",
+  "top_k": 8,
+  "max_context_chars": 24000,
+  "fallback_embedding_dim": 256,
+  "notes": "This MVP uses Ollama /api/embed and /api/chat. If Ollama is unavailable, indexing falls back to local hashed embeddings."
+}
+)JSON";
+}
+
 static Config load_config(const fs::path& root) {
     Config cfg;
-    std::string text = slurp(root / ".ultracode" / "config.json");
+    const std::string text = slurp(root / ".ultracode" / "config.json");
     auto string_value = [&](const std::string& key) -> std::optional<std::string> {
         std::regex r("\\\"" + key + "\\\"\\s*:\\s*\\\"([^\\\"]*)\\\"");
         std::smatch m;
@@ -310,27 +321,15 @@ static Config load_config(const fs::path& root) {
     return cfg;
 }
 
-static std::string default_config_json() {
-    return R"JSON({
-  "ollama_url": "http://127.0.0.1:11434",
-  "embedding_model": "nomic-embed-text",
-  "chat_model": "qwen2.5-coder:3b",
-  "top_k": 8,
-  "max_context_chars": 24000,
-  "fallback_embedding_dim": 256,
-  "notes": "This MVP uses Ollama /api/embed and /api/chat. If Ollama is unavailable, indexing falls back to local hashed embeddings."
-}
-)JSON";
-}
-
 static std::string detect_language(const fs::path& path) {
-    std::string ext = lower(path.extension().string());
+    const std::string ext = lower(path.extension().string());
     if (ext == ".cpp" || ext == ".cc" || ext == ".cxx" || ext == ".c" || ext == ".hpp" || ext == ".h" || ext == ".hh") return "cpp";
+    if (ext == ".go") return "go";
     if (ext == ".py") return "python";
     if (ext == ".js" || ext == ".jsx") return "javascript";
     if (ext == ".ts" || ext == ".tsx") return "typescript";
     if (ext == ".md" || ext == ".markdown") return "markdown";
-    if (ext == ".json" || ext == ".yaml" || ext == ".yml" || ext == ".toml") return "config";
+    if (ext == ".json" || ext == ".yaml" || ext == ".yml" || ext == ".toml" || ext == ".mod" || ext == ".sum") return "config";
     return "";
 }
 
@@ -345,8 +344,8 @@ static bool should_ignore(const fs::path& p, const Config& cfg) {
 static std::vector<Chunk> chunk_by_lines(const std::vector<std::string>& lines, const std::string& path, const std::string& lang, int max_lines = 120) {
     std::vector<Chunk> chunks;
     for (int start = 1; start <= static_cast<int>(lines.size()); start += max_lines) {
-        int end = std::min(static_cast<int>(lines.size()), start + max_lines - 1);
-        std::string content = join_lines(lines, start, end);
+        const int end = std::min(static_cast<int>(lines.size()), start + max_lines - 1);
+        const std::string content = join_lines(lines, start, end);
         if (trim(content).empty()) continue;
         Chunk c;
         c.path = path;
@@ -361,40 +360,81 @@ static std::vector<Chunk> chunk_by_lines(const std::vector<std::string>& lines, 
     return chunks;
 }
 
+static int find_brace_block_end(const std::vector<std::string>& lines, int start_line, int max_lines = 400) {
+    int depth = 0;
+    bool seen_open = false;
+    int end = start_line;
+    for (int j = start_line; j <= static_cast<int>(lines.size()); ++j) {
+        for (char c : lines[static_cast<size_t>(j - 1)]) {
+            if (c == '{') { ++depth; seen_open = true; }
+            else if (c == '}') --depth;
+        }
+        end = j;
+        if (seen_open && depth <= 0) break;
+        if (j - start_line > max_lines) break;
+    }
+    return end;
+}
+
 static std::vector<Chunk> extract_cpp_like(const std::vector<std::string>& lines, const std::string& path, const std::string& lang) {
     std::vector<Chunk> chunks;
     std::regex class_re(R"(^\s*(class|struct|enum)\s+([A-Za-z_][A-Za-z0-9_]*))");
     std::regex func_re(R"(^\s*([A-Za-z_~][A-Za-z0-9_:<>~*&\s]+)\s+([A-Za-z_~][A-Za-z0-9_:~]*)\s*\([^;]*\)\s*(const\s*)?(\{|$))");
 
     for (int i = 1; i <= static_cast<int>(lines.size()); ++i) {
-        std::string line = lines[static_cast<size_t>(i - 1)];
+        const std::string& line = lines[static_cast<size_t>(i - 1)];
         std::smatch m;
         std::string symbol;
         if (std::regex_search(line, m, class_re)) symbol = m[1].str() + " " + m[2].str();
         else if (std::regex_search(line, m, func_re)) symbol = m[2].str() + "()";
         else continue;
 
-        int start = i;
-        int end = i;
-        int depth = 0;
-        bool seen_open = false;
-        for (int j = i; j <= static_cast<int>(lines.size()); ++j) {
-            for (char c : lines[static_cast<size_t>(j - 1)]) {
-                if (c == '{') { ++depth; seen_open = true; }
-                else if (c == '}') --depth;
-            }
-            end = j;
-            if (seen_open && depth <= 0) break;
-            if (j - start > 400) break;
-        }
-        std::string content = join_lines(lines, start, end);
+        const int start = i;
+        const int end = find_brace_block_end(lines, start);
+        const std::string content = join_lines(lines, start, end);
         Chunk c;
-        c.path = path; c.language = lang; c.symbol = symbol; c.start_line = start; c.end_line = end;
-        c.hash = fnv1a_hex(path + content); c.id = c.hash;
+        c.path = path;
+        c.language = lang;
+        c.symbol = symbol;
+        c.start_line = start;
+        c.end_line = end;
+        c.hash = fnv1a_hex(path + content);
+        c.id = c.hash;
         chunks.push_back(c);
         i = end;
     }
     if (chunks.empty()) return chunk_by_lines(lines, path, lang);
+    return chunks;
+}
+
+static std::vector<Chunk> extract_go(const std::vector<std::string>& lines, const std::string& path) {
+    std::vector<Chunk> chunks;
+    std::regex func_re(R"(^\s*func\s+(?:\([^)]*\)\s*)?([A-Za-z_][A-Za-z0-9_]*)\s*\([^)]*\))");
+    std::regex type_re(R"(^\s*type\s+([A-Za-z_][A-Za-z0-9_]*)\s+(struct|interface)\s*(\{|$))");
+
+    for (int i = 1; i <= static_cast<int>(lines.size()); ++i) {
+        const std::string& line = lines[static_cast<size_t>(i - 1)];
+        std::smatch m;
+        std::string symbol;
+        if (std::regex_search(line, m, func_re)) symbol = "func " + m[1].str() + "()";
+        else if (std::regex_search(line, m, type_re)) symbol = "type " + m[1].str() + " " + m[2].str();
+        else continue;
+
+        const int start = i;
+        const int end = find_brace_block_end(lines, start);
+        const std::string content = join_lines(lines, start, end);
+        Chunk c;
+        c.path = path;
+        c.language = "go";
+        c.symbol = symbol;
+        c.start_line = start;
+        c.end_line = end;
+        c.hash = fnv1a_hex(path + content);
+        c.id = c.hash;
+        chunks.push_back(c);
+        i = end;
+    }
+    if (chunks.empty()) return chunk_by_lines(lines, path, "go");
     return chunks;
 }
 
@@ -414,8 +454,8 @@ static std::vector<Chunk> extract_python(const std::vector<std::string>& lines, 
     for (int i = 1; i <= static_cast<int>(lines.size()); ++i) {
         std::smatch m;
         if (!std::regex_search(lines[static_cast<size_t>(i - 1)], m, def_re)) continue;
-        int start = i;
-        int base_indent = indentation(lines[static_cast<size_t>(i - 1)]);
+        const int start = i;
+        const int base_indent = indentation(lines[static_cast<size_t>(i - 1)]);
         int end = static_cast<int>(lines.size());
         for (int j = i + 1; j <= static_cast<int>(lines.size()); ++j) {
             const std::string& line = lines[static_cast<size_t>(j - 1)];
@@ -423,10 +463,15 @@ static std::vector<Chunk> extract_python(const std::vector<std::string>& lines, 
             if (indentation(line) <= base_indent && std::regex_search(line, def_re)) { end = j - 1; break; }
             if (j - start > 400) { end = j; break; }
         }
-        std::string content = join_lines(lines, start, end);
+        const std::string content = join_lines(lines, start, end);
         Chunk c;
-        c.path = path; c.language = "python"; c.symbol = m[1].str() + " " + m[2].str(); c.start_line = start; c.end_line = end;
-        c.hash = fnv1a_hex(path + content); c.id = c.hash;
+        c.path = path;
+        c.language = "python";
+        c.symbol = m[1].str() + " " + m[2].str();
+        c.start_line = start;
+        c.end_line = end;
+        c.hash = fnv1a_hex(path + content);
+        c.id = c.hash;
         chunks.push_back(c);
         i = end;
     }
@@ -440,18 +485,24 @@ static std::vector<Chunk> extract_markdown(const std::vector<std::string>& lines
     for (int i = 1; i <= static_cast<int>(lines.size()); ++i) {
         std::smatch m;
         if (!std::regex_search(lines[static_cast<size_t>(i - 1)], m, heading_re)) continue;
-        int level = static_cast<int>(m[1].str().size());
+        const int level = static_cast<int>(m[1].str().size());
         int end = static_cast<int>(lines.size());
         for (int j = i + 1; j <= static_cast<int>(lines.size()); ++j) {
             std::smatch hm;
             if (std::regex_search(lines[static_cast<size_t>(j - 1)], hm, heading_re) && static_cast<int>(hm[1].str().size()) <= level) {
-                end = j - 1; break;
+                end = j - 1;
+                break;
             }
         }
-        std::string content = join_lines(lines, i, end);
+        const std::string content = join_lines(lines, i, end);
         Chunk c;
-        c.path = path; c.language = "markdown"; c.symbol = m[2].str(); c.start_line = i; c.end_line = end;
-        c.hash = fnv1a_hex(path + content); c.id = c.hash;
+        c.path = path;
+        c.language = "markdown";
+        c.symbol = m[2].str();
+        c.start_line = i;
+        c.end_line = end;
+        c.hash = fnv1a_hex(path + content);
+        c.id = c.hash;
         chunks.push_back(c);
         i = end;
     }
@@ -460,11 +511,12 @@ static std::vector<Chunk> extract_markdown(const std::vector<std::string>& lines
 }
 
 static std::vector<Chunk> extract_chunks(const fs::path& root, const fs::path& file) {
-    std::string rel = fs::relative(file, root).generic_string();
-    std::string lang = detect_language(file);
-    std::string text = slurp(file);
-    auto lines = split_lines(text);
+    const std::string rel = fs::relative(file, root).generic_string();
+    const std::string lang = detect_language(file);
+    const std::string text = slurp(file);
+    const auto lines = split_lines(text);
     if (lang == "cpp" || lang == "javascript" || lang == "typescript") return extract_cpp_like(lines, rel, lang);
+    if (lang == "go") return extract_go(lines, rel);
     if (lang == "python") return extract_python(lines, rel);
     if (lang == "markdown") return extract_markdown(lines, rel);
     return chunk_by_lines(lines, rel, lang.empty() ? "text" : lang);
@@ -520,8 +572,13 @@ static std::vector<Chunk> load_manifest(const fs::path& root) {
         while (std::getline(ls, field, '\t')) fields.push_back(field);
         if (fields.size() < 7) continue;
         Chunk c;
-        c.id = fields[0]; c.path = fields[1]; c.language = fields[2]; c.symbol = fields[3];
-        c.start_line = std::stoi(fields[4]); c.end_line = std::stoi(fields[5]); c.hash = fields[6];
+        c.id = fields[0];
+        c.path = fields[1];
+        c.language = fields[2];
+        c.symbol = fields[3];
+        c.start_line = std::stoi(fields[4]);
+        c.end_line = std::stoi(fields[5]);
+        c.hash = fields[6];
         chunks.push_back(c);
     }
     return chunks;
@@ -529,35 +586,33 @@ static std::vector<Chunk> load_manifest(const fs::path& root) {
 
 static double dot_product(const std::vector<float>& a, const std::vector<float>& b) {
     if (a.size() != b.size() || a.empty()) return 0.0;
-    double s = 0.0;
-    for (size_t i = 0; i < a.size(); ++i) s += static_cast<double>(a[i]) * b[i];
-    return s;
+    double sum = 0.0;
+    for (size_t i = 0; i < a.size(); ++i) sum += static_cast<double>(a[i]) * b[i];
+    return sum;
 }
 
 static double lexical_score(const std::string& query, const Chunk& c, const std::string& content) {
-    auto q = tokenize(query);
+    const auto q = tokenize(query);
     if (q.empty()) return 0.0;
-    std::string hay = lower(c.path + " " + c.symbol + " " + content);
+    const std::string hay = lower(c.path + " " + c.symbol + " " + content);
     double hits = 0.0;
-    for (const auto& token : q) {
-        if (hay.find(token) != std::string::npos) hits += 1.0;
-    }
+    for (const auto& token : q) if (hay.find(token) != std::string::npos) hits += 1.0;
     return hits / static_cast<double>(q.size());
 }
 
 static std::vector<RankedChunk> retrieve(const fs::path& root, const Config& cfg, const std::string& query, int top_k) {
-    auto chunks = load_manifest(root);
-    OllamaClient ollama(cfg);
+    const auto chunks = load_manifest(root);
+    const OllamaClient ollama(cfg);
     std::vector<float> qv = ollama.embed(query);
     if (qv.empty()) qv = hashed_embedding(query, cfg.fallback_embedding_dim);
 
     std::vector<RankedChunk> ranked;
     for (const auto& c : chunks) {
-        std::string content = slurp(chunk_path(root, c.id));
-        auto cv = load_vector(vector_path(root, c.id));
-        double vs = dot_product(qv, cv);
-        double ls = lexical_score(query, c, content);
-        double score = 0.62 * vs + 0.38 * ls;
+        const std::string content = slurp(chunk_path(root, c.id));
+        const auto cv = load_vector(vector_path(root, c.id));
+        const double vs = dot_product(qv, cv);
+        const double ls = lexical_score(query, c, content);
+        const double score = 0.62 * vs + 0.38 * ls;
         ranked.push_back({c, score, vs, ls, content});
     }
     std::sort(ranked.begin(), ranked.end(), [](const RankedChunk& a, const RankedChunk& b) { return a.score > b.score; });
@@ -565,12 +620,10 @@ static std::vector<RankedChunk> retrieve(const fs::path& root, const Config& cfg
     return ranked;
 }
 
-static std::string default_config_json();
-
 static void ensure_workspace(const fs::path& root) {
     fs::create_directories(root / ".ultracode" / "chunks");
     fs::create_directories(root / ".ultracode" / "vectors");
-    fs::path cfg = root / ".ultracode" / "config.json";
+    const fs::path cfg = root / ".ultracode" / "config.json";
     if (!fs::exists(cfg)) write_text(cfg, default_config_json());
 }
 
@@ -582,8 +635,8 @@ static int cmd_init(const fs::path& root) {
 
 static int cmd_index(const fs::path& root) {
     ensure_workspace(root);
-    Config cfg = load_config(root);
-    OllamaClient ollama(cfg);
+    const Config cfg = load_config(root);
+    const OllamaClient ollama(cfg);
     std::vector<Chunk> all_chunks;
     int files = 0;
     int ollama_vectors = 0;
@@ -598,21 +651,23 @@ static int cmd_index(const fs::path& root) {
         if (!it->is_regular_file()) continue;
         if (detect_language(p).empty()) continue;
         std::error_code ec;
-        auto size = fs::file_size(p, ec);
+        const auto size = fs::file_size(p, ec);
         if (ec || size > 1024 * 1024) continue;
         ++files;
         auto chunks = extract_chunks(root, p);
         for (auto& c : chunks) {
             std::string content = slurp(root / c.path);
             content = join_lines(split_lines(content), c.start_line, c.end_line);
-            fs::path cp = chunk_path(root, c.id);
-            fs::path vp = vector_path(root, c.id);
+            const fs::path cp = chunk_path(root, c.id);
+            const fs::path vp = vector_path(root, c.id);
             write_text(cp, content);
-            std::vector<float> v;
             if (!fs::exists(vp)) {
-                v = ollama.embed(content);
+                std::vector<float> v = ollama.embed(content);
                 if (!v.empty()) ++ollama_vectors;
-                else { v = hashed_embedding(content, cfg.fallback_embedding_dim); ++fallback_vectors; }
+                else {
+                    v = hashed_embedding(content, cfg.fallback_embedding_dim);
+                    ++fallback_vectors;
+                }
                 save_vector(vp, v);
             }
             all_chunks.push_back(c);
@@ -625,62 +680,60 @@ static int cmd_index(const fs::path& root) {
 }
 
 static int cmd_stats(const fs::path& root) {
-    auto chunks = load_manifest(root);
+    const auto chunks = load_manifest(root);
     std::map<std::string, int> by_lang;
     for (const auto& c : chunks) by_lang[c.language]++;
-    std::cout << "Chunks: " << chunks.size() << "\n";
-    for (const auto& [lang, count] : by_lang) std::cout << "  " << lang << ": " << count << "\n";
+    std::cout << "Chunks: " << chunks.size() << '\n';
+    for (const auto& [lang, count] : by_lang) std::cout << "  " << lang << ": " << count << '\n';
     return 0;
 }
 
 static int cmd_search(const fs::path& root, const std::string& query) {
-    Config cfg = load_config(root);
-    auto ranked = retrieve(root, cfg, query, cfg.top_k);
+    const Config cfg = load_config(root);
+    const auto ranked = retrieve(root, cfg, query, cfg.top_k);
     for (size_t i = 0; i < ranked.size(); ++i) {
         const auto& r = ranked[i];
         std::cout << i + 1 << ". " << r.chunk.path << ":" << r.chunk.start_line << "-" << r.chunk.end_line
                   << "  " << r.chunk.symbol << "  score=" << std::fixed << std::setprecision(3) << r.score
-                  << " vec=" << r.vector_score << " lex=" << r.lexical_score << "\n";
+                  << " vec=" << r.vector_score << " lex=" << r.lexical_score << '\n';
     }
     return 0;
 }
 
 static int cmd_explain(const fs::path& root, const std::string& file) {
-    Config cfg = load_config(root);
+    const Config cfg = load_config(root);
     std::string content = slurp(root / file);
     if (content.empty()) {
-        std::cerr << "Could not read file: " << file << "\n";
+        std::cerr << "Could not read file: " << file << '\n';
         return 1;
     }
     if (static_cast<int>(content.size()) > cfg.max_context_chars) content = content.substr(0, static_cast<size_t>(cfg.max_context_chars));
-    OllamaClient ollama(cfg);
-    std::string system = "You are a local coding assistant. Be concise and precise. Explain code with file paths and practical next steps.";
-    std::string user = "Explain this file:\n\n<file path=\"" + file + "\">\n" + content + "\n</file>";
-    std::cout << ollama.chat(system, user) << "\n";
+    const OllamaClient ollama(cfg);
+    const std::string system = "You are a local coding assistant. Be concise and precise. Explain code with file paths and practical next steps.";
+    const std::string user = "Explain this file:\n\n<file path=\"" + file + "\">\n" + content + "\n</file>";
+    std::cout << ollama.chat(system, user) << '\n';
     return 0;
 }
 
 static int cmd_ask(const fs::path& root, const std::string& query) {
-    Config cfg = load_config(root);
-    auto ranked = retrieve(root, cfg, query, cfg.top_k);
+    const Config cfg = load_config(root);
+    const auto ranked = retrieve(root, cfg, query, cfg.top_k);
     std::ostringstream ctx;
     int used = 0;
     for (const auto& r : ranked) {
         std::ostringstream block;
         block << "<chunk path=\"" << r.chunk.path << "\" lines=\"" << r.chunk.start_line << "-" << r.chunk.end_line
               << "\" symbol=\"" << r.chunk.symbol << "\">\n" << r.content << "\n</chunk>\n\n";
-        std::string b = block.str();
+        const std::string b = block.str();
         if (used + static_cast<int>(b.size()) > cfg.max_context_chars) break;
         ctx << b;
         used += static_cast<int>(b.size());
     }
-    std::string system = "You are a local-first coding assistant. Answer using only the provided code context. If context is insufficient, say what is missing. Always cite file paths and line ranges.";
-    std::string user = "Question:\n" + query + "\n\nRelevant code context:\n" + ctx.str();
-    OllamaClient ollama(cfg);
+    const std::string system = "You are a local-first coding assistant. Answer using only the provided code context. If context is insufficient, say what is missing. Always cite file paths and line ranges.";
+    const std::string user = "Question:\n" + query + "\n\nRelevant code context:\n" + ctx.str();
+    const OllamaClient ollama(cfg);
     std::cout << ollama.chat(system, user) << "\n\nSources:\n";
-    for (const auto& r : ranked) {
-        std::cout << "- " << r.chunk.path << ":" << r.chunk.start_line << "-" << r.chunk.end_line << " " << r.chunk.symbol << "\n";
-    }
+    for (const auto& r : ranked) std::cout << "- " << r.chunk.path << ":" << r.chunk.start_line << "-" << r.chunk.end_line << " " << r.chunk.symbol << '\n';
     return 0;
 }
 
@@ -705,9 +758,13 @@ static void print_help() {
 }
 
 int main(int argc, char** argv) {
-    fs::path root = fs::current_path();
-    if (argc < 2) { print_help(); return 0; }
-    std::string cmd = argv[1];
+    const fs::path root = fs::current_path();
+    if (argc < 2) {
+        print_help();
+        return 0;
+    }
+
+    const std::string cmd = argv[1];
     try {
         if (cmd == "init") return cmd_init(root);
         if (cmd == "index") return cmd_index(root);
@@ -727,7 +784,7 @@ int main(int argc, char** argv) {
         print_help();
         return 1;
     } catch (const std::exception& e) {
-        std::cerr << "error: " << e.what() << "\n";
+        std::cerr << "error: " << e.what() << '\n';
         return 1;
     }
 }
