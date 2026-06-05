@@ -32,6 +32,7 @@ std::vector<RankedChunk> retrieve(const fs::path& root,
                                    const std::string& query,
                                    int top_k) {
     const auto chunks = load_manifest(root);
+    const auto vectors = load_vector_store(root);
     const OllamaClient ollama(cfg);
     std::vector<float> qv = ollama.embed(query);
     if (qv.empty()) qv = hashed_embedding(query, cfg.fallback_embedding_dim);
@@ -39,7 +40,8 @@ std::vector<RankedChunk> retrieve(const fs::path& root,
     std::vector<RankedChunk> ranked;
     for (const auto& c : chunks) {
         const std::string content = slurp(chunk_path(root, c.id));
-        const auto cv             = load_vector(vector_path(root, c.id));
+        const auto it             = vectors.find(c.id);
+        const std::vector<float> cv = it != vectors.end() ? it->second : std::vector<float>{};
         const double vs           = dot_product(qv, cv);
         const double ls           = lexical_score(query, c, content);
         const double score        = 0.62 * vs + 0.38 * ls;

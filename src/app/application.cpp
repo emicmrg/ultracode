@@ -21,6 +21,11 @@ namespace fs = std::filesystem;
 
 namespace {
 
+struct ChunkEmbeddingRequest {
+    Chunk chunk;
+    std::string content;
+};
+
 int cmd_init(const fs::path& root) {
     ensure_workspace(root);
     std::cout << "Initialized .ultracode/\n";
@@ -33,6 +38,7 @@ int cmd_index(const fs::path& root) {
     const OllamaClient ollama(cfg);
     const auto previous_records = load_file_index_state(root);
     const auto previous_chunks = load_manifest(root);
+    const auto previous_vectors = load_vector_store(root);
     std::map<std::string, FileIndexRecord> previous_by_path;
     std::map<std::string, Chunk> previous_chunks_by_id;
     for (const auto& record : previous_records) {
@@ -44,7 +50,9 @@ int cmd_index(const fs::path& root) {
 
     std::vector<Chunk> all_chunks;
     std::vector<FileIndexRecord> next_records;
+    std::map<std::string, std::vector<float>> next_vectors;
     std::set<std::string> seen_paths;
+    std::vector<ChunkEmbeddingRequest> pending_embeddings;
     IndexRunSummary summary;
 
     const auto files = scan_repo(root, cfg);
@@ -58,6 +66,20 @@ int cmd_index(const fs::path& root) {
         auto previous_it = previous_by_path.find(rel);
         if (previous_it != previous_by_path.end() &&
             previous_it->second.content_hash == file_hash) {
+            bool can_reuse_vectors = true;
+            for (const auto& chunk_id : previous_it->second.chunk_ids) {
+                if (!previous_vectors.count(chunk_id)) {
+                    can_reuse_vectors = false;
+                    break;
+                }
+            }
+            if (!can_reuse_vectors) {
+                previous_it = previous_by_path.end();
+            }
+        }
+
+        if (previous_it != previous_by_path.end() &&
+            previous_it->second.content_hash == file_hash) {
             ++summary.reused_files;
             summary.reused_chunks += static_cast<int>(previous_it->second.chunk_ids.size());
             for (const auto& chunk_id : previous_it->second.chunk_ids) {
@@ -65,12 +87,17 @@ int cmd_index(const fs::path& root) {
                 if (chunk_it != previous_chunks_by_id.end()) {
                     all_chunks.push_back(chunk_it->second);
                 }
+                auto vector_it = previous_vectors.find(chunk_id);
+                if (vector_it != previous_vectors.end()) {
+                    next_vectors[chunk_id] = vector_it->second;
+                }
             }
             next_records.push_back(previous_it->second);
             continue;
         }
 
-        if (previous_it == previous_by_path.end()) {
+        const bool is_new_file = previous_by_path.find(rel) == previous_by_path.end();
+        if (is_new_file) {
             ++summary.new_files;
         } else {
             ++summary.changed_files;
@@ -85,14 +112,7 @@ int cmd_index(const fs::path& root) {
             write_text(chunk_path(root, c.id), content);
             const fs::path vp = vector_path(root, c.id);
             if (!fs::exists(vp)) {
-                std::vector<float> v = ollama.embed(content);
-                if (!v.empty()) {
-                    ++summary.ollama_vectors;
-                } else {
-                    v = hashed_embedding(content, cfg.fallback_embedding_dim);
-                    ++summary.fallback_vectors;
-                }
-                save_vector(vp, v);
+                pending_embeddings.push_back(ChunkEmbeddingRequest{c, content});
             }
             new_chunk_ids.push_back(c.id);
             new_chunk_set.insert(c.id);
@@ -119,8 +139,35 @@ int cmd_index(const fs::path& root) {
         }
     }
 
+    const int batch_size = std::max(1, cfg.embedding_batch_size);
+    for (size_t start = 0; start < pending_embeddings.size(); start += static_cast<size_t>(batch_size)) {
+        const size_t end = std::min(pending_embeddings.size(), start + static_cast<size_t>(batch_size));
+        std::vector<std::string> inputs;
+        inputs.reserve(end - start);
+        for (size_t i = start; i < end; ++i) {
+            inputs.push_back(pending_embeddings[i].content);
+        }
+
+        auto embeddings = ollama.embed_batch(inputs);
+        for (size_t i = start; i < end; ++i) {
+            const size_t local_index = i - start;
+            std::vector<float> values;
+            if (local_index < embeddings.size()) {
+                values = embeddings[local_index];
+            }
+            if (!values.empty()) {
+                ++summary.ollama_vectors;
+            } else {
+                values = hashed_embedding(pending_embeddings[i].content, cfg.fallback_embedding_dim);
+                ++summary.fallback_vectors;
+            }
+            next_vectors[pending_embeddings[i].chunk.id] = values;
+        }
+    }
+
     write_manifest(root, all_chunks);
     write_file_index_state(root, next_records);
+    write_vector_store(root, next_vectors);
     summary.total_chunks = static_cast<int>(all_chunks.size());
     write_index_run_summary(root, summary);
 

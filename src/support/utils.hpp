@@ -214,3 +214,43 @@ inline std::vector<float> parse_first_embedding(const std::string& json) {
     }
     return values;
 }
+
+inline std::vector<std::vector<float>> parse_embeddings(const std::string& json) {
+    const size_t key = json.find("\"embeddings\"");
+    if (key == std::string::npos) return {};
+    const size_t outer = json.find('[', key);
+    if (outer == std::string::npos) return {};
+
+    std::vector<std::vector<float>> embeddings;
+    for (size_t i = outer + 1; i < json.size(); ++i) {
+        if (json[i] != '[') {
+            if (json[i] == ']') break;
+            continue;
+        }
+
+        const size_t start = i;
+        int depth = 1;
+        for (++i; i < json.size() && depth > 0; ++i) {
+            if (json[i] == '[') ++depth;
+            else if (json[i] == ']') --depth;
+        }
+        if (depth != 0) return {};
+
+        const size_t end = i - 1;
+        std::string body = json.substr(start + 1, end - start - 1);
+        std::vector<float> values;
+        std::stringstream ss(body);
+        std::string item;
+        while (std::getline(ss, item, ',')) {
+            item = trim(item);
+            if (item.empty()) continue;
+            try {
+                values.push_back(std::stof(item));
+            } catch (...) {
+                return {};
+            }
+        }
+        embeddings.push_back(values);
+    }
+    return embeddings;
+}

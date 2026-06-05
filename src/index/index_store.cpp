@@ -5,7 +5,9 @@
 #include "support/utils.hpp"
 
 #include <filesystem>
+#include <fstream>
 #include <iomanip>
+#include <map>
 #include <optional>
 #include <sstream>
 
@@ -17,6 +19,10 @@ fs::path chunk_path(const fs::path& root, const std::string& id) {
 
 fs::path vector_path(const fs::path& root, const std::string& id) {
     return root / ".ultracode" / "vectors" / (id + ".vec");
+}
+
+fs::path vector_store_path(const fs::path& root) {
+    return root / ".ultracode" / "vectors.bin";
 }
 
 bool save_vector(const fs::path& path, const std::vector<float>& v) {
@@ -36,6 +42,71 @@ std::vector<float> load_vector(const fs::path& path) {
     float x;
     while (ss >> x) v.push_back(x);
     return v;
+}
+
+bool write_vector_store(const fs::path& root,
+                        const std::map<std::string, std::vector<float>>& vectors) {
+    std::ofstream out(vector_store_path(root), std::ios::binary);
+    if (!out) {
+        return false;
+    }
+
+    const char magic[4] = {'U', 'C', 'V', '1'};
+    const uint32_t version = 1;
+    const uint32_t count = static_cast<uint32_t>(vectors.size());
+    out.write(magic, sizeof(magic));
+    out.write(reinterpret_cast<const char*>(&version), sizeof(version));
+    out.write(reinterpret_cast<const char*>(&count), sizeof(count));
+
+    for (const auto& [chunk_id, values] : vectors) {
+        const uint32_t id_len = static_cast<uint32_t>(chunk_id.size());
+        const uint32_t dim = static_cast<uint32_t>(values.size());
+        out.write(reinterpret_cast<const char*>(&id_len), sizeof(id_len));
+        out.write(chunk_id.data(), static_cast<std::streamsize>(chunk_id.size()));
+        out.write(reinterpret_cast<const char*>(&dim), sizeof(dim));
+        if (!values.empty()) {
+            out.write(reinterpret_cast<const char*>(values.data()),
+                      static_cast<std::streamsize>(values.size() * sizeof(float)));
+        }
+    }
+    return static_cast<bool>(out);
+}
+
+std::map<std::string, std::vector<float>> load_vector_store(const fs::path& root) {
+    std::map<std::string, std::vector<float>> vectors;
+    std::ifstream in(vector_store_path(root), std::ios::binary);
+    if (!in) {
+        return vectors;
+    }
+
+    char magic[4] = {};
+    uint32_t version = 0;
+    uint32_t count = 0;
+    in.read(magic, sizeof(magic));
+    in.read(reinterpret_cast<char*>(&version), sizeof(version));
+    in.read(reinterpret_cast<char*>(&count), sizeof(count));
+    if (!in || std::string(magic, sizeof(magic)) != "UCV1" || version != 1) {
+        return {};
+    }
+
+    for (uint32_t i = 0; i < count; ++i) {
+        uint32_t id_len = 0;
+        uint32_t dim = 0;
+        in.read(reinterpret_cast<char*>(&id_len), sizeof(id_len));
+        if (!in) return {};
+        std::string chunk_id(id_len, '\0');
+        in.read(chunk_id.data(), static_cast<std::streamsize>(id_len));
+        in.read(reinterpret_cast<char*>(&dim), sizeof(dim));
+        if (!in) return {};
+        std::vector<float> values(dim);
+        if (dim > 0) {
+            in.read(reinterpret_cast<char*>(values.data()),
+                    static_cast<std::streamsize>(dim * sizeof(float)));
+        }
+        if (!in) return {};
+        vectors[chunk_id] = std::move(values);
+    }
+    return vectors;
 }
 
 static std::string escape_tsv(std::string s) {

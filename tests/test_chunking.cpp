@@ -150,6 +150,26 @@ static void test_incremental_indexing() {
     std::cout << "PASS: incremental indexing\n";
 }
 
+static void test_vector_store_roundtrip() {
+    const fs::path repo = make_temp_repo();
+    fs::create_directories(repo / ".ultracode");
+
+    std::map<std::string, std::vector<float>> written = {
+        {"chunk-a", {1.0f, 2.0f, 3.0f}},
+        {"chunk-b", {-0.5f, 0.25f}}
+    };
+    assert(write_vector_store(repo, written));
+    const auto loaded = load_vector_store(repo);
+    assert(loaded.size() == written.size());
+    assert(loaded.at("chunk-a").size() == 3);
+    assert(loaded.at("chunk-a")[1] == 2.0f);
+    assert(loaded.at("chunk-b").size() == 2);
+    assert(loaded.at("chunk-b")[0] == -0.5f);
+
+    fs::remove_all(repo);
+    std::cout << "PASS: vector store roundtrip\n";
+}
+
 int main() {
     test_detect_language();
     test_cpp_chunking();
@@ -158,6 +178,7 @@ int main() {
     test_ts_chunking();
     test_markdown_chunking();
     test_incremental_indexing();
+    test_vector_store_roundtrip();
     std::cout << "All tests passed.\n";
     return 0;
 }

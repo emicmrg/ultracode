@@ -10,6 +10,7 @@ struct Config {
     std::string chat_model          = "qwen2.5-coder:3b";
     int top_k                       = 8;
     int max_context_chars           = 24000;
+    int embedding_batch_size        = 16;
     int fallback_embedding_dim      = 256;
     std::vector<std::string> ignore_dirs = {
         ".git", ".ultracode", "build", "dist", "target", "node_modules",

@@ -3,6 +3,7 @@
 #include "parsing/chunk.hpp"
 
 #include <filesystem>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -30,10 +31,14 @@ std::filesystem::path chunk_path(const std::filesystem::path& root,
                                   const std::string& id);
 std::filesystem::path vector_path(const std::filesystem::path& root,
                                    const std::string& id);
+std::filesystem::path vector_store_path(const std::filesystem::path& root);
 
 bool save_vector(const std::filesystem::path& path,
                  const std::vector<float>& v);
 std::vector<float> load_vector(const std::filesystem::path& path);
+bool write_vector_store(const std::filesystem::path& root,
+                        const std::map<std::string, std::vector<float>>& vectors);
+std::map<std::string, std::vector<float>> load_vector_store(const std::filesystem::path& root);
 
 bool write_manifest(const std::filesystem::path& root,
                     const std::vector<Chunk>& chunks);
