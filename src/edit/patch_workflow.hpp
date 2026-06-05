@@ -12,6 +12,10 @@ struct PatchProposal {
     std::vector<std::string> target_paths;
 };
 
+std::string sanitize_patch_text(const std::string& model_output);
+bool validate_patch_text(const std::filesystem::path& root,
+                         const std::string& diff_text,
+                         std::string* error = nullptr);
 PatchProposal save_patch_proposal(const std::filesystem::path& root,
                                   const std::string& instruction,
                                   const std::string& diff_text,

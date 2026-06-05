@@ -260,6 +260,52 @@ static void test_patch_apply_reject_workflow() {
     std::cout << "PASS: patch apply/reject workflow\n";
 }
 
+static void test_patch_sanitization_and_validation() {
+    const fs::path repo = fs::temp_directory_path() / ("ultracode-patch-validate-" + std::to_string(std::rand()));
+    fs::create_directories(repo);
+    write_text(repo / "note.txt", "hello\n");
+    init_git_repo(repo);
+
+    const std::string fenced =
+        "Here is your patch:\n"
+        "```diff\n"
+        "diff --git a/note.txt b/note.txt\n"
+        "--- a/note.txt\n"
+        "+++ b/note.txt\n"
+        "@@ -1 +1 @@\n"
+        "-hello\n"
+        "+hi\n"
+        "```\n";
+    const std::string sanitized = sanitize_patch_text(fenced);
+    assert(sanitized.find("```") == std::string::npos);
+    assert(sanitized.rfind("diff --git a/note.txt b/note.txt", 0) == 0);
+
+    std::string error;
+    if (!validate_patch_text(repo, sanitized, &error)) {
+        std::cerr << "validate_patch_text failed unexpectedly: " << error << '\n';
+        assert(false);
+    }
+
+    const std::string truncated =
+        "diff --git a/note.txt b/note.txt\n"
+        "--- a/note.txt\n"
+        "+++ b/note.txt\n";
+    assert(!validate_patch_text(repo, truncated, &error));
+    assert(error == "Model did not return a complete unified diff.");
+
+    const std::string corrupt =
+        "diff --git a/note.txt b/note.txt\n"
+        "--- a/note.txt\n"
+        "+++ b/note.txt\n"
+        "@@ -1 +1 @@\n"
+        "-hello\n";
+    assert(!validate_patch_text(repo, corrupt, &error));
+    assert(!error.empty());
+
+    fs::remove_all(repo);
+    std::cout << "PASS: patch sanitization and validation\n";
+}
+
 int main() {
     test_detect_language();
     test_cpp_chunking();
@@ -272,6 +318,7 @@ int main() {
     test_chat_session_commands();
     test_git_diff_context();
     test_patch_apply_reject_workflow();
+    test_patch_sanitization_and_validation();
     std::cout << "All tests passed.\n";
     return 0;
 }

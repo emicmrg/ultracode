@@ -98,7 +98,102 @@ bool update_patch_status(const fs::path& root,
     return write_patch_meta(root, *proposal);
 }
 
+std::string build_apply_check_command(const fs::path& root, const fs::path& patch_path) {
+    return "git -C " + shell_quote(root.string()) +
+           " apply --check " + shell_quote(patch_path.string()) + " 2>&1";
+}
+
+bool looks_like_diff_line(const std::string& line) {
+    return line.rfind("diff --git ", 0) == 0 ||
+           line.rfind("--- ", 0) == 0;
+}
+
 }  // namespace
+
+std::string sanitize_patch_text(const std::string& model_output) {
+    std::string text = trim(model_output);
+    const size_t diff_block = text.find("```diff");
+    const size_t plain_block = text.find("```");
+    if (diff_block != std::string::npos) {
+        const size_t start = text.find('\n', diff_block);
+        if (start != std::string::npos) {
+            const size_t end = text.find("```", start + 1);
+            text = trim(text.substr(start + 1, end == std::string::npos ? std::string::npos : end - start - 1));
+        }
+    } else if (plain_block != std::string::npos) {
+        const size_t start = text.find('\n', plain_block);
+        if (start != std::string::npos) {
+            const size_t end = text.find("```", start + 1);
+            text = trim(text.substr(start + 1, end == std::string::npos ? std::string::npos : end - start - 1));
+        }
+    }
+
+    std::stringstream ss(text);
+    std::string line;
+    std::vector<std::string> lines;
+    bool started = false;
+    while (std::getline(ss, line)) {
+        if (!started && looks_like_diff_line(line)) {
+            started = true;
+        }
+        if (started) {
+            lines.push_back(line);
+        }
+    }
+
+    if (!lines.empty()) {
+        std::ostringstream out;
+        for (size_t i = 0; i < lines.size(); ++i) {
+            if (i) {
+                out << '\n';
+            }
+            out << lines[i];
+        }
+        text = trim(out.str());
+    }
+
+    if (!text.empty() && text.back() != '\n') {
+        text += '\n';
+    }
+
+    return text;
+}
+
+bool validate_patch_text(const fs::path& root,
+                         const std::string& diff_text,
+                         std::string* error) {
+    if (trim(diff_text).empty()) {
+        if (error) *error = "Model returned an empty patch.";
+        return false;
+    }
+
+    const bool has_git_header = diff_text.find("diff --git ") != std::string::npos;
+    const bool has_old_header = diff_text.find("\n--- ") != std::string::npos || diff_text.rfind("--- ", 0) == 0;
+    const bool has_new_header = diff_text.find("\n+++ ") != std::string::npos || diff_text.rfind("+++ ", 0) == 0;
+    const bool has_hunk = diff_text.find("\n@@ ") != std::string::npos || diff_text.rfind("@@ ", 0) == 0;
+    if ((!has_git_header && !has_old_header) || !has_new_header || !has_hunk) {
+        if (error) *error = "Model did not return a complete unified diff.";
+        return false;
+    }
+
+    const auto target_paths = extract_patch_target_paths(diff_text);
+    if (target_paths.empty()) {
+        if (error) *error = "Patch does not contain valid target file paths.";
+        return false;
+    }
+
+    fs::create_directories(patches_dir(root));
+    const fs::path temp_patch = patches_dir(root) / (".validate-" + fnv1a_hex(diff_text) + ".diff");
+    write_text(temp_patch, diff_text);
+    const std::string check_output = run_command_capture(build_apply_check_command(root, temp_patch));
+    std::error_code ec;
+    fs::remove(temp_patch, ec);
+    if (!check_output.empty()) {
+        if (error) *error = trim(check_output);
+        return false;
+    }
+    return true;
+}
 
 PatchProposal save_patch_proposal(const fs::path& root,
                                   const std::string& instruction,
@@ -179,9 +274,7 @@ bool apply_patch_proposal(const fs::path& root,
     const fs::path diff_path = patch_file_path(root, patch_id);
     const std::string quoted_root = shell_quote(root.string());
     const std::string quoted_patch = shell_quote(diff_path.string());
-    const std::string check_cmd =
-        "git -C " + quoted_root + " apply --check " + quoted_patch + " 2>&1";
-    const std::string check_output = run_command_capture(check_cmd);
+    const std::string check_output = run_command_capture(build_apply_check_command(root, diff_path));
     if (!check_output.empty()) {
         if (error) *error = trim(check_output);
         return false;

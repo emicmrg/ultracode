@@ -303,21 +303,27 @@ int cmd_patch(const fs::path& root, const std::string& instruction) {
     }
 
     const std::string system =
-        "You are a local coding assistant. Return only a unified diff patch. "
-        "Do not include markdown fences or commentary.";
+        "You are a local coding assistant. Return only a complete unified diff patch. "
+        "Do not include markdown fences, prose, bullets, explanations, or code outside the patch. "
+        "Every file change must include diff --git, ---, +++, and @@ hunk headers.";
     const std::string user =
         "Requested change:\n" + instruction +
         "\n\nRelevant code context:\n" + ctx.str() +
+        "\n\nPatch requirements:\n"
+        "- Modify only files that are necessary for the request.\n"
+        "- Preserve the existing coding style and schema.\n"
+        "- If adding repeated entries, add all requested entries, not a partial subset.\n"
+        "- Return only a valid unified diff.\n" +
         (diff_context.diff_text.empty() ? "" : "\nWorking tree diff:\n" + diff_context.diff_text);
     const OllamaClient ollama(cfg);
-    const std::string diff_text = ollama.chat(system, user);
-    const auto target_paths = extract_patch_target_paths(diff_text);
-    if (target_paths.empty()) {
-        std::cerr
-            << "Model did not return a valid unified diff with target files. "
-            << "Patch proposal was not saved.\n";
+    const std::string diff_text = sanitize_patch_text(ollama.chat(system, user));
+    std::string patch_error;
+    if (!validate_patch_text(root, diff_text, &patch_error)) {
+        std::cerr << "Model returned an invalid patch: " << patch_error
+                  << ". Patch proposal was not saved.\n";
         return 1;
     }
+    const auto target_paths = extract_patch_target_paths(diff_text);
     const PatchProposal proposal = save_patch_proposal(root, instruction, diff_text, target_paths);
 
     std::cout << "Saved patch proposal " << proposal.id
