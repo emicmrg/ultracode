@@ -100,11 +100,10 @@ Element render_patches_view(TuiState& state,
             }
         }
 
-        auto content = vbox(std::move(diff_lines)) | frame | vscroll_indicator;
         if (diff_lines.empty()) {
-            content = text(" Empty diff") | dim | center;
+            return text(" Empty diff") | dim | center;
         }
-        return content;
+        return vbox(std::move(diff_lines)) | vscroll_indicator | frame;
     };
 
     auto list_panel   = build_list()   | border | size(WIDTH, GREATER_THAN, 30);
