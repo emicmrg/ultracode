@@ -1,6 +1,7 @@
 #include "app/application.hpp"
 
 #include "app/config.hpp"
+#include "app/diagnose.hpp"
 #include "edit/patch_workflow.hpp"
 #include "index/index_store.hpp"
 #include "index/repo_scanner.hpp"
@@ -284,8 +285,22 @@ int cmd_index(const fs::path& root) {
               << summary.changed_files << " changed, "
               << summary.reused_files << " reused, "
               << summary.deleted_files << " deleted.\n";
-    std::cout << "Vectors: " << summary.ollama_vectors << " from Ollama, "
-              << summary.fallback_vectors << " local fallback.\n";
+
+    const int total_vecs = summary.ollama_vectors + summary.fallback_vectors;
+    if (total_vecs > 0) {
+        const int pct_ollama = (summary.ollama_vectors * 100) / total_vecs;
+        const int pct_fallback = (summary.fallback_vectors * 100) / total_vecs;
+        std::cout << "Vectors: " << summary.ollama_vectors << " from Ollama (" << pct_ollama << "%), "
+                  << summary.fallback_vectors << " local fallback (" << pct_fallback << "%).\n";
+        if (pct_fallback > 50) {
+            std::cout << "\033[33m  Warning: " << pct_fallback
+                      << "% of vectors use local fallback. Ensure Ollama is running and '" << cfg.embedding_model
+                      << "' model is pulled for better semantic search.\033[0m\n";
+        }
+    } else {
+        std::cout << "Vectors: " << summary.ollama_vectors << " from Ollama, "
+                  << summary.fallback_vectors << " local fallback.\n";
+    }
     return 0;
 }
 
@@ -538,6 +553,107 @@ int cmd_reject(const fs::path& root, const std::string& patch_id) {
     return 0;
 }
 
+int cmd_diagnose(const fs::path&, const Config& cfg) {
+    const auto result = run_diagnose({}, cfg);
+    print_diagnose(result);
+    return 0;
+}
+
+int cmd_compare(const fs::path& root,
+                const std::string& query) {
+    const Config cfg = load_config(root);
+    const auto diff_context = load_repo_diff_context(root, cfg.max_context_chars / 3);
+
+    const OllamaClient ollama(cfg);
+    std::vector<float> qv = ollama.embed(query);
+    if (qv.empty()) qv = hashed_embedding(query, cfg.fallback_embedding_dim);
+
+    const auto chunks = load_manifest(root);
+    const auto vectors = load_vector_store(root);
+
+    struct ScoredEntry {
+        RankedChunk ranked;
+        double vec_only;
+        double lex_only;
+    };
+
+    std::vector<ScoredEntry> entries;
+    for (const auto& c : chunks) {
+        const std::string content = slurp(chunk_path(root, c.id));
+        const auto it = vectors.find(c.id);
+        std::vector<float> cv = it != vectors.end() ? it->second : std::vector<float>{};
+        double vs = 0.0;
+        if (!qv.empty() && !cv.empty()) {
+            for (size_t i = 0; i < std::min(qv.size(), cv.size()); ++i) {
+                vs += static_cast<double>(qv[i]) * cv[i];
+            }
+        }
+        entries.push_back(ScoredEntry{
+            RankedChunk{c, 0.0, vs, 0.0, content}, vs, 0.0});
+    }
+
+    for (auto& e : entries) {
+        e.lex_only = 0.0;
+        const auto q = tokenize(query);
+        if (!q.empty()) {
+            const std::string hay = lower(e.ranked.chunk.path + " " + e.ranked.chunk.symbol + " " + e.ranked.content);
+            double hits = 0.0;
+            for (const auto& token : q)
+                if (hay.find(token) != std::string::npos) hits += 1.0;
+            e.lex_only = hits / static_cast<double>(q.size());
+        }
+    }
+
+    std::cout << "=== Vector-only ranking ===\n";
+    {
+        auto by_vec = entries;
+        std::sort(by_vec.begin(), by_vec.end(),
+            [](const ScoredEntry& a, const ScoredEntry& b) { return a.vec_only > b.vec_only; });
+        int shown = 0;
+        for (const auto& e : by_vec) {
+            if (shown >= 5) break;
+            std::cout << shown + 1 << ". " << e.ranked.chunk.path << ":"
+                      << e.ranked.chunk.start_line << "-" << e.ranked.chunk.end_line
+                      << "  " << e.ranked.chunk.symbol
+                      << "  vec=" << std::fixed << std::setprecision(4) << e.vec_only << '\n';
+            ++shown;
+        }
+    }
+
+    std::cout << "\n=== Lexical-only ranking ===\n";
+    {
+        auto by_lex = entries;
+        std::sort(by_lex.begin(), by_lex.end(),
+            [](const ScoredEntry& a, const ScoredEntry& b) { return a.lex_only > b.lex_only; });
+        int shown = 0;
+        for (const auto& e : by_lex) {
+            if (shown >= 5) break;
+            std::cout << shown + 1 << ". " << e.ranked.chunk.path << ":"
+                      << e.ranked.chunk.start_line << "-" << e.ranked.chunk.end_line
+                      << "  " << e.ranked.chunk.symbol
+                      << "  lex=" << std::fixed << std::setprecision(4) << e.lex_only << '\n';
+            ++shown;
+        }
+    }
+
+    std::cout << "\n=== Hybrid ranking (search command) ===\n";
+    {
+        const auto ranked = retrieve(root, cfg, query, cfg.top_k, diff_context.changed_paths);
+        int shown = 0;
+        for (const auto& r : ranked) {
+            if (shown >= 5) break;
+            std::cout << shown + 1 << ". " << r.chunk.path << ":"
+                      << r.chunk.start_line << "-" << r.chunk.end_line
+                      << "  " << r.chunk.symbol
+                      << "  score=" << std::fixed << std::setprecision(3) << r.score
+                      << " vec=" << r.vector_score
+                      << " lex=" << r.lexical_score << '\n';
+            ++shown;
+        }
+    }
+    return 0;
+}
+
 }  // namespace
 
 int run_command(const fs::path& root, const CommandRequest& request) {
@@ -594,6 +710,16 @@ int run_command(const fs::path& root, const CommandRequest& request) {
             return 1;
         }
         return cmd_explain(root, request.args.front());
+    }
+    if (request.name == "diagnose") {
+        return cmd_diagnose(root, load_config(root));
+    }
+    if (request.name == "compare") {
+        if (request.args.empty() || request.args.front().empty()) {
+            std::cerr << "Missing query.\n";
+            return 1;
+        }
+        return cmd_compare(root, request.args.front());
     }
 
     std::cerr << "Unknown command: " << request.name << '\n';

@@ -109,6 +109,7 @@ endif()
 set(ULTRACODE_LIB_SOURCES
     src/app/application.cpp
     src/app/config.cpp
+    src/app/diagnose.cpp
     src/cli/command_router.cpp
     src/edit/patch_workflow.cpp
     src/index/index_store.cpp
