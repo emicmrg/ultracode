@@ -336,14 +336,14 @@ int run_tui(const fs::path& root, const Config& cfg) {
                 state.chat_input.pop_back();
                 return true;
             }
-            if (event == Event::ArrowUp) {
+            if (event == Event::ArrowUp || event == Event::PageUp) {
                 const int max_scroll = std::max(0,
-                    static_cast<int>(state.chat_history.size()) / 2 - 3);
+                    static_cast<int>(state.chat_history.size()) / 2 - 2);
                 if (state.chat_scroll < max_scroll)
                     state.chat_scroll++;
                 return true;
             }
-            if (event == Event::ArrowDown) {
+            if (event == Event::ArrowDown || event == Event::PageDown) {
                 if (state.chat_scroll > 0)
                     state.chat_scroll--;
                 return true;

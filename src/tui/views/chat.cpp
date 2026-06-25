@@ -45,7 +45,7 @@ Element render_chat_view(TuiState& state,
                           const Config& /*cfg*/,
                           Element input_rendered) {
     constexpr int kWrapWidth = 75;
-    constexpr int kPageSize = 6;
+    constexpr int kPageSize = 4;
     Elements history_items;
 
     const int total = static_cast<int>(state.chat_history.size());
@@ -89,15 +89,16 @@ Element render_chat_view(TuiState& state,
         const int above = start;
         const int below = std::max(0, total - end);
         const int total_turns = total / 2;
-        const int visible_first = start / 2 + 1;
-        const int visible_last = (end - 1) / 2 + 1;
+        const int visible_first = total_turns > 0 ? start / 2 + 1 : 1;
+        const int visible_last = total_turns > 0 ? (end - 1) / 2 + 1 : 1;
         history_items.push_back(separator());
         history_items.push_back(
-            text(" arrows:scroll  turn " + std::to_string(visible_first) +
+            text(" turn " + std::to_string(visible_first) +
                  "-" + std::to_string(visible_last) + "/" +
                  std::to_string(total_turns) +
-                 "  (older: " + std::to_string(above / 2) +
-                 "  newer: " + std::to_string(below / 2) + ")") | dim);
+                 "  older:" + std::to_string(above / 2) +
+                 " newer:" + std::to_string(below / 2) +
+                 "  arrows/PgUp/PgDn:scroll") | dim);
     }
 
     auto history = vbox(std::move(history_items)) | vscroll_indicator | frame | flex;
