@@ -20,6 +20,7 @@
 #include <filesystem>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -197,7 +198,7 @@ int run_tui(const fs::path& root, const Config& cfg) {
                     state.chat_streaming = true;
                     screen.Post(Event::Custom);
 
-                    screen.Post([&, root, cfg, instruction] {
+                    std::thread([&, root, cfg, instruction] {
                         try {
                             const auto diff_ctx = load_repo_diff_context(
                                 root, cfg.max_context_chars / 3);
@@ -246,7 +247,7 @@ int run_tui(const fs::path& root, const Config& cfg) {
                         }
                         state.chat_streaming = false;
                         screen.Post(Event::Custom);
-                    });
+                    }).detach();
                     return true;
                 }
 
@@ -255,7 +256,7 @@ int run_tui(const fs::path& root, const Config& cfg) {
                 state.chat_streaming = true;
                 screen.Post(Event::Custom);
 
-                screen.Post([&, root, cfg, user_msg] {
+                std::thread([&, root, cfg, user_msg] {
                     try {
                         const auto diff_ctx = load_repo_diff_context(
                             root, cfg.max_context_chars / 3);
@@ -294,7 +295,7 @@ int run_tui(const fs::path& root, const Config& cfg) {
                     }
                     state.chat_streaming = false;
                     screen.Post(Event::Custom);
-                });
+                }).detach();
                 return true;
             }
 
