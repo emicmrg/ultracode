@@ -100,7 +100,7 @@ Element render_patches_view(TuiState& state,
             }
         }
 
-        auto content = vbox(std::move(diff_lines)) | vscroll_indicator | frame;
+        auto content = vbox(std::move(diff_lines)) | frame | vscroll_indicator;
         if (diff_lines.empty()) {
             content = text(" Empty diff") | dim | center;
         }
@@ -108,7 +108,7 @@ Element render_patches_view(TuiState& state,
     };
 
     auto list_panel   = build_list()   | border | size(WIDTH, GREATER_THAN, 30);
-    auto preview_panel = build_preview() | border | flex;
+    auto preview_panel = build_preview() | border | size(HEIGHT, GREATER_THAN, 10) | flex;
 
     Element body;
     if (state.patches_confirm_visible) {
