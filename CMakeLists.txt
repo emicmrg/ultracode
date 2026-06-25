@@ -122,6 +122,11 @@ if(ULTRACODE_USE_TUI)
 
     set(ULTRACODE_TUI_SOURCES
         src/tui/tui_app.cpp
+        src/tui/views/context.cpp
+        src/tui/views/chat.cpp
+        src/tui/views/index.cpp
+        src/tui/views/patches.cpp
+        src/tui/components/status_bar.cpp
     )
     set(ULTRACODE_TUI_LIBS
         ftxui::dom

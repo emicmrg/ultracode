@@ -1,25 +1,23 @@
 #include "tui/tui_app.hpp"
 
+#include "tui/components/status_bar.hpp"
+#include "tui/views/context.hpp"
+#include "tui/views/chat.hpp"
+#include "tui/views/index.hpp"
+#include "tui/views/patches.hpp"
+
 #include "app/config.hpp"
-#include "index/index_store.hpp"
-#include "index/repo_scanner.hpp"
+#include "edit/patch_workflow.hpp"
 #include "llm/ollama_client.hpp"
-#include "parsing/chunk_extractor.hpp"
 #include "retrieval/retriever.hpp"
 #include "support/utils.hpp"
 #include "vcs/git_diff.hpp"
 
-#include <ftxui/dom/elements.hpp>
-#include <ftxui/screen/screen.hpp>
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/screen_interactive.hpp>
+#include <ftxui/dom/elements.hpp>
 
-#include <algorithm>
-#include <chrono>
 #include <filesystem>
-#include <iomanip>
-#include <iostream>
-#include <map>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -32,65 +30,24 @@ namespace tui {
 
 namespace {
 
-Color language_color(const std::string& lang) {
-    if (lang == "cpp")        return Color::Cyan;
-    if (lang == "go")         return Color::CyanLight;
-    if (lang == "python")     return Color::Yellow;
-    if (lang == "javascript") return Color::YellowLight;
-    if (lang == "typescript") return Color::BlueLight;
-    if (lang == "markdown")   return Color::Green;
-    if (lang == "config")     return Color::Magenta;
-    return Color::White;
+std::string build_chat_system_prompt() {
+    return
+        "You are a local-first coding assistant. Answer using ONLY the provided "
+        "code context. For every claim, cite at least one file path and line "
+        "range: path/to/file.ext:10-25. If the context is insufficient, state "
+        "what is missing instead of guessing. Be concise.";
 }
 
-Element render_search_view(TuiState& state,
-                           const fs::path& root,
-                           const Config& cfg) {
-    auto input_box = Input(&state.search_query, "Type query and press Enter...");
-    auto input_rendered = input_box->Render() | border | size(HEIGHT, EQUAL, 3);
-
-    Elements result_items;
-    if (state.search_running) {
-        result_items.push_back(text(" Searching...") | dim);
-    } else if (!state.search_error.empty()) {
-        result_items.push_back(text(" " + state.search_error) | color(Color::Red));
-    } else if (state.search_results.empty()) {
-        result_items.push_back(text(" No results yet. Type a query and press Enter.") | dim);
-    } else {
-        for (size_t i = 0; i < state.search_results.size(); ++i) {
-            const auto& r = state.search_results[i];
-            const bool selected = (static_cast<int>(i) == state.selected_index);
-            auto line = text(
-                " " + std::to_string(i + 1) + ". " +
-                r.chunk.path + ":" +
-                std::to_string(r.chunk.start_line) + "-" +
-                std::to_string(r.chunk.end_line) + "  "
-            );
-            if (selected) line = line | inverted;
-            line = line | color(language_color(r.chunk.language));
-            result_items.push_back(line);
-
-            auto detail = text(
-                "    " + r.chunk.symbol +
-                "  score=" + std::to_string(r.score).substr(0, 5) +
-                " vec=" + std::to_string(r.vector_score).substr(0, 5) +
-                " lex=" + std::to_string(r.lexical_score).substr(0, 5)
-            ) | dim;
-            if (selected) detail = detail | inverted;
-            result_items.push_back(detail);
-        }
-    }
-
-    auto results = vbox(std::move(result_items)) | vscroll_indicator | frame | border | flex;
-
-    Elements children;
-    children.push_back(input_rendered);
-    children.push_back(results);
-    return vbox(std::move(children)) | flex;
+std::string build_patch_system_prompt() {
+    return
+        "You are a local coding assistant. Return only a complete unified diff "
+        "patch. Do not include markdown fences, prose, bullets, explanations, "
+        "or code outside the patch. Every file change must include diff --git, "
+        "---, +++, and @@ hunk headers.";
 }
 
-std::string render_context_blocks_tui(const std::vector<RankedChunk>& ranked,
-                                       int max_context_chars) {
+std::string context_blocks_xml(const std::vector<RankedChunk>& ranked,
+                                int max_chars) {
     std::ostringstream ctx;
     int used = 0;
     for (const auto& r : ranked) {
@@ -100,7 +57,7 @@ std::string render_context_blocks_tui(const std::vector<RankedChunk>& ranked,
               << "\" symbol=\"" << r.chunk.symbol << "\">\n"
               << r.content << "\n</chunk>\n\n";
         const std::string rendered = block.str();
-        if (used + static_cast<int>(rendered.size()) > max_context_chars) {
+        if (used + static_cast<int>(rendered.size()) > max_chars) {
             break;
         }
         ctx << rendered;
@@ -109,128 +66,15 @@ std::string render_context_blocks_tui(const std::vector<RankedChunk>& ranked,
     return ctx.str();
 }
 
-Element render_chat_view(TuiState& state,
-                         const fs::path& /*root*/,
-                         const Config& /*cfg*/) {
-    Elements history_items;
-    int max_visible = 10;
-    int start = std::max(0, static_cast<int>(state.chat_history.size()) - max_visible);
-    for (int i = start; i < static_cast<int>(state.chat_history.size()); ++i) {
-        const auto& msg = state.chat_history[static_cast<size_t>(i)];
-        bool is_user = (i % 2 == 0);
-        auto prefix = is_user ? text(" You> ") | color(Color::Cyan) :
-                                 text(" AI>  ") | color(Color::Green);
-        history_items.push_back(hbox(Elements{prefix, paragraph(msg)}));
-    }
-    if (state.chat_history.empty()) {
-        history_items.push_back(text(" No conversation yet. Type a message below.") | dim);
-    }
-
-    auto history = vbox(std::move(history_items)) | vscroll_indicator | frame | border | flex;
-    auto input = Input(&state.chat_input, "Type message and press Enter...");
-    auto input_rendered = input->Render() | border | size(HEIGHT, EQUAL, 3);
-    if (state.chat_streaming) {
-        input_rendered = input_rendered | dim;
-    }
-
-    Elements children;
-    children.push_back(history);
-    children.push_back(input_rendered);
-    return vbox(std::move(children)) | flex;
-}
-
-Element render_index_view(TuiState& /*state*/,
-                          const fs::path& root,
-                          const Config& /*cfg*/) {
-    Elements items;
-    items.push_back(text(" Repository: " + root.string()) | bold);
-
-    const auto manifest = load_manifest(root);
-    items.push_back(text(" Chunks indexed: " + std::to_string(manifest.size())));
-
-    std::map<std::string, int> by_lang;
-    for (const auto& c : manifest) {
-        by_lang[c.language]++;
-    }
-    for (const auto& [lang, count] : by_lang) {
-        items.push_back(text("   " + lang + ": " + std::to_string(count))
-            | color(language_color(lang)));
-    }
-
-    if (const auto summary = load_index_run_summary(root)) {
-        items.push_back(separator());
-        items.push_back(text(" Last index run:") | bold);
-        items.push_back(text("   Scanned: " + std::to_string(summary->scanned_files)));
-        items.push_back(text("   New:     " + std::to_string(summary->new_files)));
-        items.push_back(text("   Changed: " + std::to_string(summary->changed_files)));
-        items.push_back(text("   Reused:  " + std::to_string(summary->reused_files)));
-        items.push_back(text("   Deleted: " + std::to_string(summary->deleted_files)));
-    } else {
-        items.push_back(text(" No index data yet. Run 'index' first.") | dim);
-    }
-
-    return vbox(std::move(items)) | border | flex;
-}
-
-Element render_patch_view(TuiState& /*state*/,
-                          const fs::path& root,
-                          const Config& /*cfg*/) {
-    Elements items;
-
-    const auto patches_dir = root / ".ultracode" / "patches";
-    if (!fs::exists(patches_dir)) {
-        items.push_back(text(" No patches yet.") | dim);
-    } else {
-        int count = 0;
-        for (auto it = fs::directory_iterator(patches_dir);
-             it != fs::directory_iterator(); ++it) {
-            if (it->path().extension() == ".meta") {
-                ++count;
-                const std::string name = it->path().stem().string();
-                const std::string text_content = slurp(it->path());
-                std::string patch_status = "?";
-                if (text_content.find("\tapplied\t") != std::string::npos) patch_status = "applied";
-                else if (text_content.find("\trejected\t") != std::string::npos) patch_status = "rejected";
-                else patch_status = "pending";
-
-                Color st_color = patch_status == "applied" ? Color::Green :
-                                 patch_status == "rejected" ? Color::Red : Color::Yellow;
-                items.push_back(text(" " + patch_status + "  " + name) | color(st_color));
-            }
-        }
-        if (count == 0) {
-            items.push_back(text(" No patches yet.") | dim);
-        }
-    }
-
-    return vbox(std::move(items)) | border | flex;
-}
-
-Element render_status_bar(const TuiState& state) {
-    auto tabs = text(
-        " F1:Search  F2:Chat  F3:Index  F4:Patches  Tab:Next  Esc:Quit"
-    ) | dim;
-
-    auto ollama_status = state.ollama_connected
-        ? text(" Ollama:ON ") | color(Color::Green)
-        : text(" Ollama:OFF ") | color(Color::Red);
-
-    auto tab_names = std::vector<std::string>{"Search", "Chat", "Index", "Patches"};
-    auto tab = text(" [" + tab_names[static_cast<int>(state.active_tab)] + "] ") | bold;
-
-    return hbox(Elements{ollama_status, tab, tabs, filler(), text(" ultracode ") | dim})
-        | border | size(HEIGHT, EQUAL, 3);
-}
-
 Element render_main(TuiState& state,
                     const fs::path& root,
                     const Config& cfg) {
     Element content;
     switch (state.active_tab) {
-        case Tab::Search:  content = render_search_view(state, root, cfg); break;
-        case Tab::Chat:    content = render_chat_view(state, root, cfg); break;
-        case Tab::Index:   content = render_index_view(state, root, cfg); break;
-        case Tab::Patches: content = render_patch_view(state, root, cfg); break;
+        case Tab::Context: content = render_context_view(state, root, cfg); break;
+        case Tab::Chat:    content = render_chat_view(state, root, cfg);    break;
+        case Tab::Index:   content = render_index_view(state, root, cfg);   break;
+        case Tab::Patches: content = render_patches_view(state, root, cfg); break;
         default:           content = text("Unknown tab") | center; break;
     }
 
@@ -240,29 +84,34 @@ Element render_main(TuiState& state,
     return vbox(std::move(children)) | flex;
 }
 
-bool handle_tui_input(Event event, TuiState& state) {
+bool handle_global_keys(Event event, TuiState& state) {
     if (event == Event::Escape) {
+        if (state.patches_confirm_visible) {
+            state.patches_confirm_visible = false;
+            state.patches_confirm_action.clear();
+            return true;
+        }
         return false;
     }
-    if (event == Event::F1) {
-        state.active_tab = Tab::Search;
+    if (state.patches_confirm_visible) {
+        if (event == Event::Character('y') || event == Event::Character('Y')) {
+            state.patches_confirm_visible = false;
+            return true;
+        }
+        if (event == Event::Character('n') || event == Event::Character('N')) {
+            state.patches_confirm_visible = false;
+            state.patches_confirm_action.clear();
+            return true;
+        }
         return true;
     }
-    if (event == Event::F2) {
-        state.active_tab = Tab::Chat;
-        return true;
-    }
-    if (event == Event::F3) {
-        state.active_tab = Tab::Index;
-        return true;
-    }
-    if (event == Event::F4) {
-        state.active_tab = Tab::Patches;
-        return true;
-    }
+    if (event == Event::F1) { state.active_tab = Tab::Context;  return true; }
+    if (event == Event::F2) { state.active_tab = Tab::Chat;     return true; }
+    if (event == Event::F3) { state.active_tab = Tab::Index;    return true; }
+    if (event == Event::F4) { state.active_tab = Tab::Patches;  return true; }
     if (event == Event::Tab) {
-        state.active_tab = static_cast<Tab>(
-            (static_cast<int>(state.active_tab) + 1) % static_cast<int>(Tab::Count));
+        int next = (static_cast<int>(state.active_tab) + 1) % static_cast<int>(Tab::Count);
+        state.active_tab = static_cast<Tab>(next);
         return true;
     }
     if (event == Event::TabReverse) {
@@ -271,7 +120,7 @@ bool handle_tui_input(Event event, TuiState& state) {
         state.active_tab = static_cast<Tab>(prev);
         return true;
     }
-    return true;
+    return false;
 }
 
 }  // namespace
@@ -286,98 +135,171 @@ int run_tui(const fs::path& root, const Config& cfg) {
     });
 
     auto component = CatchEvent(renderer, [&](Event event) {
-        if (!handle_tui_input(event, state)) {
+        const bool handled = handle_global_keys(event, state);
+        if (!handled) {
             screen.ExitLoopClosure()();
             return true;
         }
+        if (handled && (event == Event::F1 || event == Event::F2 ||
+                        event == Event::F3 || event == Event::F4 ||
+                        event == Event::Tab || event == Event::TabReverse)) {
+            return true;
+        }
 
-        if (event == Event::Return && state.active_tab == Tab::Search &&
-            !state.search_running) {
-            if (!state.search_query.empty()) {
-                state.search_running = true;
-                state.search_results.clear();
-                state.search_error.clear();
-                screen.Post([&, root, cfg] {
+        if (event == Event::Escape && state.patches_confirm_visible) {
+            return true;
+        }
+
+        if (state.active_tab == Tab::Chat) {
+            if (event == Event::Return && !state.chat_streaming &&
+                !state.chat_input.empty()) {
+                std::string user_msg = state.chat_input;
+                state.chat_input.clear();
+
+                if (user_msg.rfind("/patch ", 0) == 0) {
+                    std::string instruction = trim(user_msg.substr(7));
+                    state.chat_history.push_back("/patch " + instruction);
+                    state.chat_streaming = true;
+
+                    screen.Post([&, root, cfg, instruction] {
+                        try {
+                            const auto diff_ctx = load_repo_diff_context(
+                                root, cfg.max_context_chars / 3);
+                            const auto ranked = retrieve(
+                                root, cfg, instruction, cfg.top_k,
+                                diff_ctx.changed_paths);
+                            const std::string ctx = context_blocks_xml(
+                                ranked, cfg.max_context_chars);
+
+                            OllamaClient ollama(cfg);
+                            std::string user = "Requested change:\n" + instruction +
+                                "\n\nRelevant code context:\n" + ctx +
+                                "\n\nPatch requirements:\n"
+                                "- Modify only files that are necessary.\n"
+                                "- Preserve existing coding style.\n"
+                                "- Return only a valid unified diff.\n";
+                            if (!diff_ctx.diff_text.empty()) {
+                                user += "\nWorking tree diff:\n" + diff_ctx.diff_text;
+                            }
+
+                            const std::string raw = ollama.chat(
+                                build_patch_system_prompt(), user);
+                            const std::string diff = sanitize_patch_text(raw);
+                            std::string patch_error;
+                            if (!validate_patch_text(root, diff, &patch_error)) {
+                                state.chat_history.push_back(
+                                    "patch error: " + patch_error);
+                            } else {
+                                auto targets = extract_patch_target_paths(diff);
+                                auto prop = save_patch_proposal(
+                                    root, instruction, diff, targets);
+                                state.chat_history.push_back(
+                                    "patch saved: " + prop.id +
+                                    " (" + std::to_string(targets.size()) +
+                                    " file(s))");
+                            }
+                        } catch (const std::exception& e) {
+                            state.chat_history.push_back(
+                                std::string("error: ") + e.what());
+                        }
+                        state.chat_streaming = false;
+                        screen.Post(Event::Custom);
+                    });
+                    return true;
+                }
+
+                state.chat_history.push_back(user_msg);
+                state.chat_streaming = true;
+
+                screen.Post([&, root, cfg, user_msg] {
                     try {
                         const auto diff_ctx = load_repo_diff_context(
                             root, cfg.max_context_chars / 3);
-                        state.search_results = retrieve(
-                            root, cfg, state.search_query, cfg.top_k,
+                        const auto ranked = retrieve(
+                            root, cfg, user_msg, cfg.top_k,
                             diff_ctx.changed_paths);
+                        const std::string ctx = context_blocks_xml(
+                            ranked, cfg.max_context_chars);
+
+                        OllamaClient ollama(cfg);
+                        std::vector<ChatMessage> messages;
+                        messages.push_back(ChatMessage{
+                            "system", build_chat_system_prompt()});
+                        messages.push_back(ChatMessage{
+                            "user",
+                            "Question:\n" + user_msg +
+                            "\n\nRelevant code context:\n" + ctx +
+                            (diff_ctx.diff_text.empty() ? ""
+                                : "\nWorking tree diff:\n" + diff_ctx.diff_text)
+                        });
+
+                        std::ostringstream captured;
+                        const auto response = ollama.chat_stream(
+                            messages, captured);
+                        state.chat_history.push_back(response);
+                        state.last_retrieved_chunks = ranked;
                     } catch (const std::exception& e) {
-                        state.search_error = e.what();
+                        state.chat_history.push_back(
+                            std::string("error: ") + e.what());
                     }
-                    state.search_running = false;
+                    state.chat_streaming = false;
+                    screen.Post(Event::Custom);
                 });
+                return true;
             }
-            return true;
-        }
 
-        if (event == Event::Return && state.active_tab == Tab::Chat &&
-            !state.chat_streaming && !state.chat_input.empty()) {
-            std::string user_msg = state.chat_input;
-            state.chat_input.clear();
-            state.chat_history.push_back(user_msg);
-            state.chat_streaming = true;
-
-            screen.Post([&, root, cfg, user_msg] {
-                try {
-                    const auto diff_ctx = load_repo_diff_context(
-                        root, cfg.max_context_chars / 3);
-                    const auto ranked = retrieve(
-                        root, cfg, user_msg, cfg.top_k,
-                        diff_ctx.changed_paths);
-                    const std::string ctx = render_context_blocks_tui(
-                        ranked, cfg.max_context_chars);
-
-                    OllamaClient ollama(cfg);
-                    std::vector<ChatMessage> messages;
-                    messages.push_back(ChatMessage{
-                        "system",
-                        "You are a local-first coding assistant. Be concise."
-                        "Cite file paths and line ranges."
-                    });
-                    messages.push_back(ChatMessage{
-                        "user",
-                        "Question:\n" + user_msg +
-                        "\n\nRelevant code context:\n" + ctx +
-                        (diff_ctx.diff_text.empty() ? ""
-                            : "\nWorking tree diff:\n" + diff_ctx.diff_text)
-                    });
-
-                    std::ostringstream captured;
-                    const auto response = ollama.chat_stream(
-                        messages, captured);
-                    state.chat_history.push_back(response);
-                } catch (const std::exception& e) {
-                    state.chat_history.push_back(
-                        std::string("error: ") + e.what());
-                }
-                state.chat_streaming = false;
-            });
-            return true;
-        }
-
-        if (event.is_character() && state.active_tab == Tab::Search) {
-            state.search_query += event.character();
-            return true;
-        }
-        if (event == Event::Backspace && state.active_tab == Tab::Search) {
-            if (!state.search_query.empty()) {
-                state.search_query.pop_back();
+            if (event.is_character()) {
+                state.chat_input += event.character();
+                return true;
             }
-            return true;
-        }
-
-        if (event.is_character() && state.active_tab == Tab::Chat) {
-            state.chat_input += event.character();
-            return true;
-        }
-        if (event == Event::Backspace && state.active_tab == Tab::Chat) {
-            if (!state.chat_input.empty()) {
+            if (event == Event::Backspace && !state.chat_input.empty()) {
                 state.chat_input.pop_back();
+                return true;
             }
-            return true;
+        }
+
+        if (state.active_tab == Tab::Patches) {
+            if (event == Event::ArrowUp || event == Event::ArrowLeft) {
+                if (state.patches_selected_index > 0)
+                    state.patches_selected_index--;
+                return true;
+            }
+            if (event == Event::ArrowDown || event == Event::ArrowRight) {
+                state.patches_selected_index++;
+                return true;
+            }
+            if (event == Event::Character('a') &&
+                state.patches_confirm_visible) {
+                return true;
+            }
+            if (event == Event::Character('r') &&
+                state.patches_confirm_visible) {
+                return true;
+            }
+            if (event == Event::Character('a')) {
+                state.patches_confirm_visible = true;
+                state.patches_confirm_action = "apply";
+                return true;
+            }
+            if (event == Event::Character('r')) {
+                state.patches_confirm_visible = true;
+                state.patches_confirm_action = "reject";
+                return true;
+            }
+        }
+
+        if (state.active_tab == Tab::Context) {
+            if (event == Event::ArrowDown) {
+                if (state.selected_index < static_cast<int>(
+                        state.last_retrieved_chunks.size()) - 1)
+                    state.selected_index++;
+                return true;
+            }
+            if (event == Event::ArrowUp) {
+                if (state.selected_index > 0)
+                    state.selected_index--;
+                return true;
+            }
         }
 
         return true;
