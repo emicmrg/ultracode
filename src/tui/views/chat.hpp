@@ -9,7 +9,8 @@ namespace tui {
 
 ftxui::Element render_chat_view(TuiState& state,
                                  const std::filesystem::path& root,
-                                 const Config& cfg);
+                                 const Config& cfg,
+                                 ftxui::Element input_rendered);
 
 } // namespace tui
 } // namespace ultracode

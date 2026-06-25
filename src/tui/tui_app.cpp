@@ -68,11 +68,12 @@ std::string context_blocks_xml(const std::vector<RankedChunk>& ranked,
 
 Element render_main(TuiState& state,
                     const fs::path& root,
-                    const Config& cfg) {
+                    const Config& cfg,
+                    Element chat_input_element) {
     Element content;
     switch (state.active_tab) {
         case Tab::Context: content = render_context_view(state, root, cfg); break;
-        case Tab::Chat:    content = render_chat_view(state, root, cfg);    break;
+        case Tab::Chat:    content = render_chat_view(state, root, cfg, chat_input_element); break;
         case Tab::Index:   content = render_index_view(state, root, cfg);   break;
         case Tab::Patches: content = render_patches_view(state, root, cfg); break;
         default:           content = text("Unknown tab") | center; break;
@@ -122,9 +123,16 @@ int run_tui(const fs::path& root, const Config& cfg) {
     TuiState state;
     state.ollama_connected = true;
 
+    auto chat_input_component = Input(&state.chat_input, "Type message and press Enter...");
+
     auto screen = ScreenInteractive::Fullscreen();
     auto renderer = Renderer([&] {
-        return render_main(state, root, cfg);
+        auto input_el = chat_input_component->Render()
+            | border | size(HEIGHT, EQUAL, 3);
+        if (state.chat_streaming) {
+            input_el = input_el | dim;
+        }
+        return render_main(state, root, cfg, input_el);
     });
 
     auto component = CatchEvent(renderer, [&](Event event) {
@@ -185,7 +193,9 @@ int run_tui(const fs::path& root, const Config& cfg) {
                 if (user_msg.rfind("/patch ", 0) == 0) {
                     std::string instruction = trim(user_msg.substr(7));
                     state.chat_history.push_back("/patch " + instruction);
+                    state.chat_history.push_back("");
                     state.chat_streaming = true;
+                    screen.Post(Event::Custom);
 
                     screen.Post([&, root, cfg, instruction] {
                         try {
@@ -212,6 +222,9 @@ int run_tui(const fs::path& root, const Config& cfg) {
                                 build_patch_system_prompt(), user);
                             const std::string diff = sanitize_patch_text(raw);
                             std::string patch_error;
+                            if (!state.chat_history.empty()) {
+                                state.chat_history.pop_back();
+                            }
                             if (!validate_patch_text(root, diff, &patch_error)) {
                                 state.chat_history.push_back(
                                     "patch error: " + patch_error);
@@ -225,6 +238,9 @@ int run_tui(const fs::path& root, const Config& cfg) {
                                     " file(s))");
                             }
                         } catch (const std::exception& e) {
+                            if (!state.chat_history.empty()) {
+                                state.chat_history.pop_back();
+                            }
                             state.chat_history.push_back(
                                 std::string("error: ") + e.what());
                         }
@@ -235,7 +251,9 @@ int run_tui(const fs::path& root, const Config& cfg) {
                 }
 
                 state.chat_history.push_back(user_msg);
+                state.chat_history.push_back("");
                 state.chat_streaming = true;
+                screen.Post(Event::Custom);
 
                 screen.Post([&, root, cfg, user_msg] {
                     try {
@@ -262,9 +280,15 @@ int run_tui(const fs::path& root, const Config& cfg) {
                         std::ostringstream captured;
                         const auto response = ollama.chat_stream(
                             messages, captured);
+                        if (!state.chat_history.empty()) {
+                            state.chat_history.pop_back();
+                        }
                         state.chat_history.push_back(response);
                         state.last_retrieved_chunks = ranked;
                     } catch (const std::exception& e) {
+                        if (!state.chat_history.empty()) {
+                            state.chat_history.pop_back();
+                        }
                         state.chat_history.push_back(
                             std::string("error: ") + e.what());
                     }
