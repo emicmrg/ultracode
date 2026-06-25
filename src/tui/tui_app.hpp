@@ -29,8 +29,11 @@ struct TuiState {
 
     int selected_index = 0;
     int patches_selected_index = 0;
+    std::vector<std::string> patch_ids;
+    std::vector<std::string> patch_statuses;
     std::string patches_confirm_action;
     bool patches_confirm_visible = false;
+    std::string patches_error;
 
     std::string status_text;
     bool ollama_connected = false;

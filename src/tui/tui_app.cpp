@@ -89,20 +89,12 @@ bool handle_global_keys(Event event, TuiState& state) {
         if (state.patches_confirm_visible) {
             state.patches_confirm_visible = false;
             state.patches_confirm_action.clear();
+            state.patches_error.clear();
             return true;
         }
         return false;
     }
     if (state.patches_confirm_visible) {
-        if (event == Event::Character('y') || event == Event::Character('Y')) {
-            state.patches_confirm_visible = false;
-            return true;
-        }
-        if (event == Event::Character('n') || event == Event::Character('N')) {
-            state.patches_confirm_visible = false;
-            state.patches_confirm_action.clear();
-            return true;
-        }
         return true;
     }
     if (event == Event::F1) { state.active_tab = Tab::Context;  return true; }
@@ -142,11 +134,44 @@ int run_tui(const fs::path& root, const Config& cfg) {
         }
         if (handled && (event == Event::F1 || event == Event::F2 ||
                         event == Event::F3 || event == Event::F4 ||
-                        event == Event::Tab || event == Event::TabReverse)) {
+                        event == Event::Tab || event == Event::TabReverse ||
+                        event == Event::Escape)) {
             return true;
         }
 
-        if (event == Event::Escape && state.patches_confirm_visible) {
+        if (state.patches_confirm_visible) {
+            if (event == Event::Character('y') || event == Event::Character('Y')) {
+                state.patches_error.clear();
+                if (!state.patch_ids.empty() &&
+                    state.patches_selected_index >= 0 &&
+                    state.patches_selected_index < static_cast<int>(state.patch_ids.size())) {
+
+                    const std::string pid = state.patch_ids[static_cast<size_t>(state.patches_selected_index)];
+                    std::string err;
+                    bool ok = false;
+                    if (state.patches_confirm_action == "apply") {
+                        ok = apply_patch_proposal(root, pid, &err);
+                    } else if (state.patches_confirm_action == "reject") {
+                        ok = reject_patch_proposal(root, pid, &err);
+                    }
+                    if (ok) {
+                        state.patches_confirm_visible = false;
+                        state.patches_confirm_action.clear();
+                        screen.Post(Event::Custom);
+                    } else {
+                        state.patches_error = err;
+                    }
+                } else {
+                    state.patches_error = "no patch selected";
+                }
+                return true;
+            }
+            if (event == Event::Character('n') || event == Event::Character('N')) {
+                state.patches_confirm_visible = false;
+                state.patches_confirm_action.clear();
+                state.patches_error.clear();
+                return true;
+            }
             return true;
         }
 
