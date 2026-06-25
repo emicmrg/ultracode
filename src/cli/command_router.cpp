@@ -65,5 +65,6 @@ void print_help(std::ostream& out) {
         << "  ultracode reject <patch-id>\n"
         << "  ultracode explain <file>\n"
         << "  ultracode diagnose\n"
-        << "  ultracode compare <query>\n";
+        << "  ultracode compare <query>\n"
+        << "  ultracode tui\n";
 }

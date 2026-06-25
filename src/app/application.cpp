@@ -12,6 +12,10 @@
 #include "support/utils.hpp"
 #include "vcs/git_diff.hpp"
 
+#ifdef ULTRACODE_USE_TUI
+#include "tui/tui_app.hpp"
+#endif
+
 #include <filesystem>
 #include <chrono>
 #include <iomanip>
@@ -721,6 +725,11 @@ int run_command(const fs::path& root, const CommandRequest& request) {
         }
         return cmd_compare(root, request.args.front());
     }
+#ifdef ULTRACODE_USE_TUI
+    if (request.name == "tui") {
+        return ultracode::tui::run_tui(root, load_config(root));
+    }
+#endif
 
     std::cerr << "Unknown command: " << request.name << '\n';
     return 1;

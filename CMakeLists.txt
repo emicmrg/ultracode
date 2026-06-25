@@ -105,6 +105,31 @@ if(ULTRACODE_USE_TREESITTER)
     set(ULTRACODE_TS_INCLUDE_DIRS ${tree-sitter_SOURCE_DIR}/lib/include)
 endif()
 
+# ── Terminal UI (optional) ────────────────────────────────────────────────────
+option(ULTRACODE_USE_TUI "Enable terminal UI (FTXUI)" ON)
+
+if(ULTRACODE_USE_TUI)
+    include(FetchContent)
+
+    FetchContent_Declare(ftxui
+        GIT_REPOSITORY https://github.com/ArthurSonzogni/FTXUI.git
+        GIT_TAG        v5.0.0
+        GIT_SHALLOW    TRUE
+    )
+    FetchContent_MakeAvailable(ftxui)
+    set(FTXUI_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(FTXUI_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+
+    set(ULTRACODE_TUI_SOURCES
+        src/tui/tui_app.cpp
+    )
+    set(ULTRACODE_TUI_LIBS
+        ftxui::dom
+        ftxui::screen
+        ftxui::component
+    )
+endif()
+
 # ── Shared library sources ────────────────────────────────────────────────────
 set(ULTRACODE_LIB_SOURCES
     src/app/application.cpp
@@ -120,6 +145,7 @@ set(ULTRACODE_LIB_SOURCES
     src/session/chat_session.cpp
     src/vcs/git_diff.cpp
     ${ULTRACODE_TS_SOURCES}
+    ${ULTRACODE_TUI_SOURCES}
 )
 
 # ── Main executable ───────────────────────────────────────────────────────────
@@ -133,6 +159,10 @@ if(ULTRACODE_USE_TREESITTER)
     target_compile_definitions(ultracode PRIVATE ULTRACODE_USE_TREESITTER)
     target_include_directories(ultracode PRIVATE ${ULTRACODE_TS_INCLUDE_DIRS})
     target_link_libraries(ultracode PRIVATE ${ULTRACODE_TS_LIBS})
+endif()
+if(ULTRACODE_USE_TUI)
+    target_compile_definitions(ultracode PRIVATE ULTRACODE_USE_TUI)
+    target_link_libraries(ultracode PRIVATE ${ULTRACODE_TUI_LIBS})
 endif()
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
@@ -148,5 +178,9 @@ if(ULTRACODE_USE_TREESITTER)
     target_compile_definitions(test_chunking PRIVATE ULTRACODE_USE_TREESITTER)
     target_include_directories(test_chunking PRIVATE ${ULTRACODE_TS_INCLUDE_DIRS})
     target_link_libraries(test_chunking PRIVATE ${ULTRACODE_TS_LIBS})
+endif()
+if(ULTRACODE_USE_TUI)
+    target_compile_definitions(test_chunking PRIVATE ULTRACODE_USE_TUI)
+    target_link_libraries(test_chunking PRIVATE ${ULTRACODE_TUI_LIBS})
 endif()
 add_test(NAME test_chunking COMMAND $<TARGET_FILE:test_chunking>)
