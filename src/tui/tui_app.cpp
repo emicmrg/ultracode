@@ -85,6 +85,7 @@ Element render_main(TuiState& state,
 }
 
 bool handle_global_keys(Event event, TuiState& state) {
+    if (event.is_mouse()) return true;
     if (event == Event::Escape) {
         if (state.patches_confirm_visible) {
             state.patches_confirm_visible = false;
@@ -112,7 +113,7 @@ bool handle_global_keys(Event event, TuiState& state) {
         state.active_tab = static_cast<Tab>(prev);
         return true;
     }
-    return false;
+    return true;
 }
 
 }  // namespace
