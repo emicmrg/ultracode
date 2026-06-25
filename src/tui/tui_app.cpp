@@ -191,8 +191,18 @@ int run_tui(const fs::path& root, const Config& cfg) {
                 std::string user_msg = state.chat_input;
                 state.chat_input.clear();
 
-                if (user_msg.rfind("/patch ", 0) == 0) {
-                    std::string instruction = trim(user_msg.substr(7));
+                bool is_patch = false;
+                std::string patch_instruction;
+                {
+                    const std::string prefix7 = user_msg.size() >= 7 ? lower(user_msg.substr(0, 7)) : "";
+                    if (prefix7 == "/patch ") {
+                        is_patch = true;
+                        patch_instruction = trim(user_msg.substr(7));
+                    }
+                }
+
+                if (is_patch) {
+                    std::string instruction = patch_instruction;
                     state.chat_history.push_back("/patch " + instruction);
                     state.chat_history.push_back("");
                     state.chat_streaming = true;
@@ -229,6 +239,23 @@ int run_tui(const fs::path& root, const Config& cfg) {
                             if (!validate_patch_text(root, diff, &patch_error)) {
                                 state.chat_history.push_back(
                                     "patch error: " + patch_error);
+                                const int trunc = std::min(400, static_cast<int>(raw.size()));
+                                state.chat_history.push_back(
+                                    "raw output: " + raw.substr(0, static_cast<size_t>(trunc)) +
+                                    (static_cast<int>(raw.size()) > trunc ? "..." : ""));
+                                const std::string dbg_name =
+                                    "patch-fail-" + fnv1a_hex(instruction).substr(0, 8) + ".txt";
+                                const fs::path dbg_dir = root / ".ultracode" / "debug";
+                                fs::create_directories(dbg_dir);
+                                write_text(dbg_dir / dbg_name,
+                                    "INSTRUCTION:\n" + instruction +
+                                    "\n\nSYSTEM:\n" + build_patch_system_prompt() +
+                                    "\n\nUSER:\n" + user +
+                                    "\n\nRAW OUTPUT:\n" + raw +
+                                    "\n\nSANITIZED:\n" + diff +
+                                    "\n\nVALIDATION ERROR:\n" + patch_error);
+                                state.chat_history.push_back(
+                                    "debug: .ultracode/debug/" + dbg_name);
                             } else {
                                 auto targets = extract_patch_target_paths(diff);
                                 auto prop = save_patch_proposal(

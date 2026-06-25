@@ -3,6 +3,7 @@
 #include <ftxui/dom/elements.hpp>
 #include <algorithm>
 #include <filesystem>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -12,10 +13,38 @@ using namespace ftxui;
 namespace ultracode {
 namespace tui {
 
+namespace {
+
+Elements wrap_lines(const std::string& raw_text, int width) {
+    Elements lines;
+    std::stringstream ss(raw_text);
+    std::string physical;
+    while (std::getline(ss, physical)) {
+        if (physical.empty()) {
+            lines.push_back(text(""));
+            continue;
+        }
+        while (static_cast<int>(physical.size()) > width) {
+            int cut = static_cast<int>(physical.find_last_of(" \t", static_cast<size_t>(width)));
+            if (cut <= 0) cut = width;
+            lines.push_back(text(physical.substr(0, static_cast<size_t>(cut))));
+            if (static_cast<size_t>(cut) < physical.size() && physical[static_cast<size_t>(cut)] == ' ')
+                ++cut;
+            physical = physical.substr(static_cast<size_t>(cut));
+        }
+        if (!physical.empty())
+            lines.push_back(text(physical));
+    }
+    return lines;
+}
+
+}  // namespace
+
 Element render_chat_view(TuiState& state,
                           const fs::path& /*root*/,
                           const Config& /*cfg*/,
                           Element input_rendered) {
+    constexpr int kWrapWidth = 75;
     Elements history_items;
     int max_visible = 10;
     int start = std::max(0, static_cast<int>(state.chat_history.size()) - max_visible);
@@ -37,11 +66,12 @@ Element render_chat_view(TuiState& state,
             auto dots = text(" Thinking...") | dim | blink;
             body = hbox(Elements{dots, filler()}) | flex;
         } else {
-            body = paragraph(msg) | flex;
+            body = vbox(wrap_lines(msg, kWrapWidth));
         }
 
         Elements msg_rows;
         msg_rows.push_back(prefix);
+        msg_rows.push_back(separator() | dim);
         msg_rows.push_back(body);
         history_items.push_back(vbox(std::move(msg_rows)) | border);
     }
