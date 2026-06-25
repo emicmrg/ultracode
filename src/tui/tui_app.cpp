@@ -87,7 +87,6 @@ Element render_main(TuiState& state,
 }
 
 bool handle_global_keys(Event event, TuiState& state) {
-    if (event.is_mouse()) return true;
     if (event == Event::Escape) {
         if (state.patches_confirm_visible) {
             state.patches_confirm_visible = false;
@@ -137,6 +136,17 @@ int run_tui(const fs::path& root, const Config& cfg) {
     });
 
     auto component = CatchEvent(renderer, [&](Event event) {
+        if (event.is_mouse()) {
+            if (state.active_tab == Tab::Chat) {
+                auto& m = event.mouse();
+                if (m.button == Mouse::WheelUp && state.chat_scroll > 0)
+                    state.chat_scroll--;
+                else if (m.button == Mouse::WheelDown)
+                    state.chat_scroll++;
+            }
+            return true;
+        }
+
         const bool handled = handle_global_keys(event, state);
         if (!handled) {
             screen.ExitLoopClosure()();
@@ -205,7 +215,6 @@ int run_tui(const fs::path& root, const Config& cfg) {
                     std::string instruction = patch_instruction;
                     state.chat_history.push_back("/patch " + instruction);
                     state.chat_history.push_back("");
-                    state.chat_scroll = 0;
                     state.chat_streaming = true;
                     screen.Post(Event::Custom);
 
@@ -281,7 +290,6 @@ int run_tui(const fs::path& root, const Config& cfg) {
 
                 state.chat_history.push_back(user_msg);
                 state.chat_history.push_back("");
-                state.chat_scroll = 0;
                 state.chat_streaming = true;
                 screen.Post(Event::Custom);
 
@@ -337,9 +345,7 @@ int run_tui(const fs::path& root, const Config& cfg) {
                 return true;
             }
             if (event == Event::ArrowUp || event == Event::PageUp) {
-                const int max_scroll = std::max(0,
-                    static_cast<int>(state.chat_history.size()) / 2 - 2);
-                if (state.chat_scroll < max_scroll)
+                if (state.chat_scroll < 100)
                     state.chat_scroll++;
                 return true;
             }

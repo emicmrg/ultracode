@@ -45,22 +45,16 @@ Element render_chat_view(TuiState& state,
                           const Config& /*cfg*/,
                           Element input_rendered) {
     constexpr int kWrapWidth = 75;
-    constexpr int kPageSize = 4;
     Elements history_items;
 
-    const int total = static_cast<int>(state.chat_history.size());
-    const int offset = state.chat_scroll * 2;
-    const int start = std::max(0, total - kPageSize - offset);
-    const int end = std::min(total, start + kPageSize);
-
-    for (int i = start; i < end; ++i) {
-        const auto& msg = state.chat_history[static_cast<size_t>(i)];
+    for (size_t i = 0; i < state.chat_history.size(); ++i) {
+        const auto& msg = state.chat_history[i];
         const bool is_user = (i % 2 == 0);
 
         Element prefix;
         if (is_user) {
             prefix = text(" You ") | color(Color::Cyan) | bold;
-        } else if (msg.empty() && i == static_cast<int>(state.chat_history.size()) - 1) {
+        } else if (msg.empty() && i == state.chat_history.size() - 1) {
             prefix = text(" AI  ") | color(Color::Green) | bold;
         } else {
             prefix = text(" AI  ") | color(Color::Green) | bold;
@@ -86,22 +80,16 @@ Element render_chat_view(TuiState& state,
                  "Use /patch <instruction> to generate a patch.")
             | dim | center);
     } else {
-        const int above = start;
-        const int below = std::max(0, total - end);
-        const int total_turns = total / 2;
-        const int visible_first = total_turns > 0 ? start / 2 + 1 : 1;
-        const int visible_last = total_turns > 0 ? (end - 1) / 2 + 1 : 1;
+        const int turns = static_cast<int>(state.chat_history.size()) / 2;
         history_items.push_back(separator());
         history_items.push_back(
-            text(" turn " + std::to_string(visible_first) +
-                 "-" + std::to_string(visible_last) + "/" +
-                 std::to_string(total_turns) +
-                 "  older:" + std::to_string(above / 2) +
-                 " newer:" + std::to_string(below / 2) +
-                 "  arrows/PgUp/PgDn:scroll") | dim);
+            text(" " + std::to_string(turns) + " turns  mouse-wheel/arrows/PageUp/PageDn:scroll")
+            | dim);
     }
 
-    auto history = vbox(std::move(history_items)) | vscroll_indicator | frame | flex;
+    auto history = vbox(std::move(history_items))
+        | focusPositionRelative(0, state.chat_scroll)
+        | frame | vscroll_indicator | flex;
 
     Elements children;
     children.push_back(history);
