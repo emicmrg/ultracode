@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "User",
+  "type": "object",
+  "required": [
+    "id",
+    "email",
+    "name"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$",
+      "description": "Unique user identifier"
+    },
+    "email": {
+      "type": "string",
+      "format": "email",
+      "maxLength": 256,
+      "description": "User email address"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "Display name"
+    },
+    "role": {
+      "type": "string",
+      "enum": [
+        "admin",
+        "user",
+        "viewer"
+      ],
+      "default": "user",
+      "description": "User role determining permissions"
+    },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "avatar_url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "timezone": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "preferences": {
+          "type": "object",
+          "properties": {
+            "theme": {
+              "type": "string",
+              "enum": [
+                "light",
+                "dark",
+                "system"
+              ]
+            },
+            "language": {
+              "type": "string",
+              "maxLength": 10
+            },
+            "notifications": {
+              "type": "object",
+              "properties": {
+                "email": {
+                  "type": "boolean",
+                  "default": true
+                },
+                "webhook": {
+                  "type": "boolean",
+                  "default": false
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

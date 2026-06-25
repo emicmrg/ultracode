@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Project",
+  "type": "object",
+  "required": [
+    "id",
+    "name",
+    "owner_id"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 1024
+    },
+    "owner_id": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$"
+    },
+    "visibility": {
+      "type": "string",
+      "enum": [
+        "public",
+        "private",
+        "internal"
+      ],
+      "default": "private"
+    },
+    "settings": {
+      "type": "object",
+      "required": [
+        "max_artifacts",
+        "retention_days",
+        "default_branch"
+      ],
+      "properties": {
+        "max_artifacts": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000,
+          "default": 100,
+          "description": "Maximum number of artifacts to retain"
+        },
+        "retention_days": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3650,
+          "default": 90,
+          "description": "Days to retain old artifact versions"
+        },
+        "default_branch": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "default": "main",
+          "description": "Default branch for the project"
+        },
+        "enable_ci": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable CI/CD pipeline for this project"
+        },
+        "allowed_artifact_types": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "binary",
+              "library",
+              "docker",
+              "helm",
+              "npm",
+              "pypi"
+            ]
+          },
+          "description": "Allowed artifact types for this project"
+        }
+      }
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "maxLength": 64
+      },
+      "maxItems": 20,
+      "uniqueItems": true
+    }
+  }
+}

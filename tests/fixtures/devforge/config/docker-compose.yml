@@ -1,0 +1,106 @@
+version: "3.8"
+
+services:
+  server:
+    build:
+      context: ..
+      dockerfile: config/Dockerfile
+    ports:
+      - "8080:8080"
+      - "9090:9090"
+    volumes:
+      - artifacts:/var/lib/devforge/artifacts
+      - ./default.yaml:/etc/devforge/config.yaml:ro
+    environment:
+      - JWT_SECRET=${JWT_SECRET:-change-me-in-production}
+      - DB_HOST=postgres
+      - DB_USER=devforge
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_NAME=devforge
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  worker:
+    build:
+      context: ..
+      dockerfile: config/Dockerfile
+    command: devforge-worker
+    volumes:
+      - artifacts:/var/lib/devforge/artifacts
+      - ./default.yaml:/etc/devforge/config.yaml:ro
+    environment:
+      - JWT_SECRET=${JWT_SECRET:-change-me-in-production}
+      - DB_HOST=postgres
+      - DB_USER=devforge
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_NAME=devforge
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_USER=devforge
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+      - POSTGRES_DB=devforge
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U devforge"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    restart: unless-stopped
+
+  migrate:
+    build:
+      context: ..
+      dockerfile: config/Dockerfile
+    command: devforge-setup
+    environment:
+      - DB_HOST=postgres
+      - DB_USER=devforge
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_NAME=devforge
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles:
+      - setup
+
+volumes:
+  artifacts:
+    driver: local
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  default:
+    name: devforge
+    driver: bridge

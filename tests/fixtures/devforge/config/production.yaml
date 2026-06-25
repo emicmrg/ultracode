@@ -1,0 +1,70 @@
+# DevForge Platform - Production Configuration
+server:
+  port: 443
+  host: "0.0.0.0"
+  read_timeout: 10s
+  write_timeout: 30s
+  shutdown_timeout: 30s
+  tls:
+    cert: "/etc/ssl/devforge/cert.pem"
+    key: "/etc/ssl/devforge/key.pem"
+
+auth:
+  enabled: true
+  jwt:
+    secret: "${JWT_SECRET}"
+    ttl: 2h
+    issuer: "devforge"
+  session:
+    max_lifetime: 168h
+    cookie_secure: true
+    cookie_same_site: "strict"
+
+database:
+  driver: postgres
+  host: "${DB_HOST}"
+  port: 5432
+  name: "devforge"
+  user: "${DB_USER}"
+  password: "${DB_PASSWORD}"
+  ssl_mode: "verify-full"
+  max_connections: 100
+  connection_timeout: 10s
+  pool:
+    min_idle: 10
+    max_idle: 25
+    max_lifetime: 30m
+
+storage:
+  artifacts:
+    backend: s3
+    bucket: "devforge-artifacts-prod"
+    region: "us-east-1"
+    endpoint: "https://s3.amazonaws.com"
+
+rate_limit:
+  enabled: true
+  requests_per_minute: 1000
+  burst: 2000
+
+worker:
+  concurrency: 16
+  poll_interval: 1s
+  max_retry: 5
+  queue_size: 10000
+
+logging:
+  level: warn
+  format: json
+  output: stdout
+  redact_sensitive: true
+
+metrics:
+  enabled: true
+  port: 9090
+
+backup:
+  enabled: true
+  schedule: "0 3 * * *"
+  retention_days: 30
+  destination: "s3://devforge-backups-prod"

@@ -1,0 +1,41 @@
+# DevForge Platform - Staging Configuration
+server:
+  port: 8443
+  host: "0.0.0.0"
+  read_timeout: 15s
+  write_timeout: 30s
+  shutdown_timeout: 15s
+
+auth:
+  enabled: true
+  jwt:
+    secret: "staging-secret-key-change-in-production"
+    ttl: 48h
+    issuer: "devforge-staging"
+
+database:
+  driver: sqlite3
+  path: "./staging.db"
+  max_connections: 10
+
+storage:
+  artifacts:
+    path: "./data/staging/artifacts"
+    max_size: 5368709120
+
+rate_limit:
+  enabled: false
+
+worker:
+  concurrency: 2
+  poll_interval: 10s
+  max_retry: 3
+
+logging:
+  level: debug
+  format: text
+  output: stdout
+  file: "./staging.log"
+
+metrics:
+  enabled: false
