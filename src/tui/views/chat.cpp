@@ -50,7 +50,7 @@ Element render_chat_view(TuiState& state,
 
     const int total = static_cast<int>(state.chat_history.size());
     const int offset = state.chat_scroll * 2;
-    const int start = std::max(0, std::min(total - kPageSize, offset));
+    const int start = std::max(0, total - kPageSize - offset);
     const int end = std::min(total, start + kPageSize);
 
     for (int i = start; i < end; ++i) {
@@ -86,13 +86,18 @@ Element render_chat_view(TuiState& state,
                  "Use /patch <instruction> to generate a patch.")
             | dim | center);
     } else {
+        const int above = start;
+        const int below = std::max(0, total - end);
         const int total_turns = total / 2;
-        const int current_turn = offset / 2;
+        const int visible_first = start / 2 + 1;
+        const int visible_last = (end - 1) / 2 + 1;
         history_items.push_back(separator());
         history_items.push_back(
-            text(" " + std::to_string(total - offset) + " more messages above"
-                 "  arrows:scroll  turn " + std::to_string(current_turn + 1) +
-                 "/" + std::to_string(total_turns)) | dim);
+            text(" arrows:scroll  turn " + std::to_string(visible_first) +
+                 "-" + std::to_string(visible_last) + "/" +
+                 std::to_string(total_turns) +
+                 "  (older: " + std::to_string(above / 2) +
+                 "  newer: " + std::to_string(below / 2) + ")") | dim);
     }
 
     auto history = vbox(std::move(history_items)) | vscroll_indicator | frame | flex;
