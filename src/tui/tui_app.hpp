@@ -29,6 +29,7 @@ struct TuiState {
 
     int selected_index = 0;
     int patches_selected_index = 0;
+    int chat_scroll = 0;
     std::vector<std::string> patch_ids;
     std::vector<std::string> patch_statuses;
     std::string patches_confirm_action;

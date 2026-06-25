@@ -45,10 +45,15 @@ Element render_chat_view(TuiState& state,
                           const Config& /*cfg*/,
                           Element input_rendered) {
     constexpr int kWrapWidth = 75;
+    constexpr int kPageSize = 6;
     Elements history_items;
-    int max_visible = 10;
-    int start = std::max(0, static_cast<int>(state.chat_history.size()) - max_visible);
-    for (int i = start; i < static_cast<int>(state.chat_history.size()); ++i) {
+
+    const int total = static_cast<int>(state.chat_history.size());
+    const int offset = state.chat_scroll * 2;
+    const int start = std::max(0, std::min(total - kPageSize, offset));
+    const int end = std::min(total, start + kPageSize);
+
+    for (int i = start; i < end; ++i) {
         const auto& msg = state.chat_history[static_cast<size_t>(i)];
         const bool is_user = (i % 2 == 0);
 
@@ -80,6 +85,14 @@ Element render_chat_view(TuiState& state,
             text(" No conversation yet. Type a message and press Enter. "
                  "Use /patch <instruction> to generate a patch.")
             | dim | center);
+    } else {
+        const int total_turns = total / 2;
+        const int current_turn = offset / 2;
+        history_items.push_back(separator());
+        history_items.push_back(
+            text(" " + std::to_string(total - offset) + " more messages above"
+                 "  arrows:scroll  turn " + std::to_string(current_turn + 1) +
+                 "/" + std::to_string(total_turns)) | dim);
     }
 
     auto history = vbox(std::move(history_items)) | vscroll_indicator | frame | flex;
