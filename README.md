@@ -219,3 +219,7 @@ ultracode
 ## Why this shape
 
 The CLI should stay cheap. On constrained machines, the LLM runtime is already the expensive part. This tool tries to preserve RAM/VRAM by caching embeddings, retrieving only a few chunks, and keeping context compact.
+
+## License
+
+This project is licensed under the [Apache License 2.0](LICENSE).
