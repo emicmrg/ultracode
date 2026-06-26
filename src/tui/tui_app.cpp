@@ -389,11 +389,42 @@ int run_tui(const fs::path& root, const Config& cfg) {
                         try {
                             const auto diff_ctx = load_repo_diff_context(
                                 root, cfg.max_context_chars / 3);
-                            const auto ranked = retrieve(
-                                root, cfg, instruction, cfg.top_k,
-                                diff_ctx.changed_paths);
-                            const std::string ctx = context_blocks_xml(
-                                ranked, cfg.max_context_chars);
+                            
+                            std::string ctx;
+                            bool has_plan = !state.current_plan.steps.empty();
+                            
+                            if (has_plan) {
+                                // Build context from planned files
+                                std::ostringstream plan_ctx;
+                                plan_ctx << "<approved_plan>\n";
+                                for (size_t i = 0; i < state.current_plan.steps.size(); ++i) {
+                                    const auto& step = state.current_plan.steps[i];
+                                    plan_ctx << "Step " << (i + 1) << ": " << step.file << "\n";
+                                    plan_ctx << "Reason: " << step.reason << "\n";
+                                    plan_ctx << "Changes:\n";
+                                    for (const auto& change : step.changes) {
+                                        plan_ctx << "- " << change << "\n";
+                                    }
+                                    plan_ctx << "\n";
+                                }
+                                plan_ctx << "</approved_plan>\n\n";
+                                
+                                // Load planned file contents
+                                for (const auto& file_path : state.current_plan.files_needed) {
+                                    std::string content = slurp(root / file_path);
+                                    if (!content.empty()) {
+                                        plan_ctx << "<file path=\"" << file_path << "\">\n"
+                                                 << content << "\n</file>\n\n";
+                                    }
+                                }
+                                ctx = plan_ctx.str();
+                            } else {
+                                // Fallback to retrieval
+                                const auto ranked = retrieve(
+                                    root, cfg, instruction, cfg.top_k,
+                                    diff_ctx.changed_paths);
+                                ctx = context_blocks_xml(ranked, cfg.max_context_chars);
+                            }
 
                             OllamaClient ollama(cfg);
                             std::string user = "Requested change:\n" + instruction +
@@ -402,6 +433,10 @@ int run_tui(const fs::path& root, const Config& cfg) {
                                 "- Modify only files that are necessary.\n"
                                 "- Preserve existing coding style.\n"
                                 "- Return only a valid unified diff.\n";
+                            if (has_plan) {
+                                user += "- You MUST follow the approved plan above.\n"
+                                        "- Only modify the files listed in the plan.\n";
+                            }
                             if (!diff_ctx.diff_text.empty()) {
                                 user += "\nWorking tree diff:\n" + diff_ctx.diff_text;
                             }
@@ -445,6 +480,11 @@ int run_tui(const fs::path& root, const Config& cfg) {
                                     "patch saved: " + prop.id +
                                     " (" + std::to_string(targets.size()) +
                                     " file(s))");
+                                // Clear plan after successful patch
+                                if (has_plan) {
+                                    state.current_plan = PlanResult{};
+                                    state.plan_instruction.clear();
+                                }
                             }
                         } catch (const std::exception& e) {
                             if (!state.chat_history.empty()) {
