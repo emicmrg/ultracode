@@ -1,4 +1,19 @@
+// Copyright 2026 Jose Emilio Camargo Chavez
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #include "tui/views/chat.hpp"
+#include "tui/markdown_renderer.hpp"
 
 #include <ftxui/dom/elements.hpp>
 #include <algorithm>
@@ -15,7 +30,7 @@ namespace tui {
 
 namespace {
 
-Elements wrap_lines(const std::string& raw_text, int width) {
+Elements wrap_lines_plain(const std::string& raw_text, int width) {
     Elements lines;
     std::stringstream ss(raw_text);
     std::string physical;
@@ -64,8 +79,10 @@ Element render_chat_view(TuiState& state,
         if (!is_user && msg.empty() && state.chat_streaming) {
             auto dots = text(" Thinking...") | dim | blink;
             body = hbox(Elements{dots, filler()}) | flex;
+        } else if (is_user) {
+            body = vbox(wrap_lines_plain(msg, kWrapWidth));
         } else {
-            body = vbox(wrap_lines(msg, kWrapWidth));
+            body = vbox(render_markdown(msg, kWrapWidth));
         }
 
         Elements msg_rows;
@@ -88,7 +105,7 @@ Element render_chat_view(TuiState& state,
     }
 
     auto history = vbox(std::move(history_items))
-        | focusPositionRelative(0, state.chat_scroll)
+        | focusPositionRelative(0.0f, state.chat_scroll)
         | frame | vscroll_indicator | flex;
 
     Elements children;

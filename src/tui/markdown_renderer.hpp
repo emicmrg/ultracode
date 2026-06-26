@@ -14,10 +14,16 @@
 
 #pragma once
 
-#include "app/application.hpp"
+#include <ftxui/dom/elements.hpp>
+#include <string>
+#include <vector>
 
-#include <optional>
-#include <ostream>
+namespace ultracode {
+namespace tui {
 
-std::optional<CommandRequest> parse_command_request(int argc, char** argv);
-void print_help(std::ostream& out);
+// Render markdown text into FTXUI elements with word-wrap.
+// Each returned element is a line (or block) ready to be stacked.
+ftxui::Elements render_markdown(const std::string& text, int width);
+
+} // namespace tui
+} // namespace ultracode

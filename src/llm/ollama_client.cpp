@@ -1,3 +1,17 @@
+// Copyright 2026 Jose Emilio Camargo Chavez
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #include "llm/ollama_client.hpp"
 
 #include "support/utils.hpp"
@@ -27,8 +41,9 @@ std::string build_chat_payload(const std::vector<ChatMessage>& messages,
     return payload.str();
 }
 
-std::string resolve_model_name(const Config& config, const std::string& override_name) {
-    return override_name.empty() ? config.chat_model : override_name;
+std::string resolve_model_name(const Config& config, TaskType task, const std::string& override_name) {
+    if (!override_name.empty()) return override_name;
+    return resolve_model(config, task);
 }
 
 }  // namespace
@@ -92,8 +107,14 @@ std::string OllamaClient::chat(const std::string& system,
 
 std::string OllamaClient::chat(const std::vector<ChatMessage>& messages,
                                 const std::string& model_override) const {
+    return chat(messages, TaskType::Chat, model_override);
+}
+
+std::string OllamaClient::chat(const std::vector<ChatMessage>& messages,
+                                TaskType task,
+                                const std::string& model_override) const {
     const std::string payload = build_chat_payload(
-        messages, resolve_model_name(config_, model_override), false);
+        messages, resolve_model_name(config_, task, model_override), false);
     const std::string cmd =
         "curl -sS --max-time 300 -H 'Content-Type: application/json' " +
         shell_quote(config_.ollama_url + "/api/chat") +
@@ -106,8 +127,15 @@ std::string OllamaClient::chat(const std::vector<ChatMessage>& messages,
 std::string OllamaClient::chat_stream(const std::vector<ChatMessage>& messages,
                                       std::ostream& out,
                                       const std::string& model_override) const {
+    return chat_stream(messages, out, TaskType::Chat, model_override);
+}
+
+std::string OllamaClient::chat_stream(const std::vector<ChatMessage>& messages,
+                                      std::ostream& out,
+                                      TaskType task,
+                                      const std::string& model_override) const {
     const std::string payload = build_chat_payload(
-        messages, resolve_model_name(config_, model_override), true);
+        messages, resolve_model_name(config_, task, model_override), true);
     const std::string cmd =
         "curl -sS -N --max-time 300 -H 'Content-Type: application/json' " +
         shell_quote(config_.ollama_url + "/api/chat") +

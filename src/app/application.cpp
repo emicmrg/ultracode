@@ -1,3 +1,17 @@
+// Copyright 2026 Jose Emilio Camargo Chavez
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #include "app/application.hpp"
 
 #include "app/config.hpp"
@@ -490,7 +504,12 @@ int cmd_patch(const fs::path& root,
     }
     const std::string full_prompt = "SYSTEM:\n" + system + "\n\nUSER:\n" + user;
     const OllamaClient ollama(cfg);
-    const std::string raw_model_output = ollama.chat(system, user);
+    const std::string raw_model_output = ollama.chat(
+        std::vector<ChatMessage>{
+            ChatMessage{"system", system},
+            ChatMessage{"user", user}
+        },
+        TaskType::Develop);
     const std::string diff_text = sanitize_patch_text(raw_model_output);
     debug.model_output_chars = static_cast<int>(raw_model_output.size());
     debug.sanitized_patch_chars = static_cast<int>(diff_text.size());

@@ -1,3 +1,17 @@
+// Copyright 2026 Jose Emilio Camargo Chavez
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #include "tui/tui_app.hpp"
 
 #include "tui/components/status_bar.hpp"
@@ -17,6 +31,7 @@
 #include <ftxui/component/screen_interactive.hpp>
 #include <ftxui/dom/elements.hpp>
 
+#include <algorithm>
 #include <filesystem>
 #include <sstream>
 #include <string>
@@ -87,18 +102,6 @@ Element render_main(TuiState& state,
 }
 
 bool handle_global_keys(Event event, TuiState& state) {
-    if (event == Event::Escape) {
-        if (state.patches_confirm_visible) {
-            state.patches_confirm_visible = false;
-            state.patches_confirm_action.clear();
-            state.patches_error.clear();
-            return true;
-        }
-        return false;
-    }
-    if (state.patches_confirm_visible) {
-        return true;
-    }
     if (event == Event::F1) { state.active_tab = Tab::Context;  return true; }
     if (event == Event::F2) { state.active_tab = Tab::Chat;     return true; }
     if (event == Event::F3) { state.active_tab = Tab::Index;    return true; }
@@ -114,7 +117,7 @@ bool handle_global_keys(Event event, TuiState& state) {
         state.active_tab = static_cast<Tab>(prev);
         return true;
     }
-    return true;
+    return false;
 }
 
 }  // namespace
@@ -139,26 +142,15 @@ int run_tui(const fs::path& root, const Config& cfg) {
         if (event.is_mouse()) {
             if (state.active_tab == Tab::Chat) {
                 auto& m = event.mouse();
-                if (m.button == Mouse::WheelUp && state.chat_scroll > 0)
-                    state.chat_scroll--;
+                if (m.button == Mouse::WheelUp)
+                    state.chat_scroll = std::clamp(state.chat_scroll - 0.05f, 0.0f, 1.0f);
                 else if (m.button == Mouse::WheelDown)
-                    state.chat_scroll++;
+                    state.chat_scroll = std::clamp(state.chat_scroll + 0.05f, 0.0f, 1.0f);
             }
             return true;
         }
 
-        const bool handled = handle_global_keys(event, state);
-        if (!handled) {
-            screen.ExitLoopClosure()();
-            return true;
-        }
-        if (handled && (event == Event::F1 || event == Event::F2 ||
-                        event == Event::F3 || event == Event::F4 ||
-                        event == Event::Tab || event == Event::TabReverse ||
-                        event == Event::Escape)) {
-            return true;
-        }
-
+        // Handle confirmation dialog first (highest priority)
         if (state.patches_confirm_visible) {
             if (event == Event::Character('y') || event == Event::Character('Y')) {
                 state.patches_error.clear();
@@ -192,6 +184,23 @@ int run_tui(const fs::path& root, const Config& cfg) {
                 state.patches_error.clear();
                 return true;
             }
+            if (event == Event::Escape) {
+                state.patches_confirm_visible = false;
+                state.patches_confirm_action.clear();
+                state.patches_error.clear();
+                return true;
+            }
+            return true;
+        }
+
+        // Escape to quit TUI
+        if (event == Event::Escape) {
+            screen.ExitLoopClosure()();
+            return true;
+        }
+
+        const bool handled = handle_global_keys(event, state);
+        if (handled) {
             return true;
         }
 
@@ -200,6 +209,26 @@ int run_tui(const fs::path& root, const Config& cfg) {
                 !state.chat_input.empty()) {
                 std::string user_msg = state.chat_input;
                 state.chat_input.clear();
+
+                // Handle /model command
+                {
+                    const std::string prefix6 = user_msg.size() >= 6 ? lower(user_msg.substr(0, 6)) : "";
+                    if (prefix6 == "/model") {
+                        std::string model = trim(user_msg.substr(6));
+                        if (model.empty()) {
+                            state.chat_history.push_back(
+                                "model: " + (state.chat_model_override.empty()
+                                    ? cfg.chat_model + " (default)"
+                                    : state.chat_model_override));
+                        } else {
+                            state.chat_model_override = model;
+                            state.chat_history.push_back("model set to: " + model);
+                        }
+                        state.chat_scroll = 1.0f;
+                        screen.Post(Event::Custom);
+                        return true;
+                    }
+                }
 
                 bool is_patch = false;
                 std::string patch_instruction;
@@ -215,6 +244,7 @@ int run_tui(const fs::path& root, const Config& cfg) {
                     std::string instruction = patch_instruction;
                     state.chat_history.push_back("/patch " + instruction);
                     state.chat_history.push_back("");
+                    state.chat_scroll = 1.0f;
                     state.chat_streaming = true;
                     screen.Post(Event::Custom);
 
@@ -240,7 +270,11 @@ int run_tui(const fs::path& root, const Config& cfg) {
                             }
 
                             const std::string raw = ollama.chat(
-                                build_patch_system_prompt(), user);
+                                std::vector<ChatMessage>{
+                                    ChatMessage{"system", build_patch_system_prompt()},
+                                    ChatMessage{"user", user}
+                                },
+                                TaskType::Develop);
                             const std::string diff = sanitize_patch_text(raw);
                             std::string patch_error;
                             if (!state.chat_history.empty()) {
@@ -282,6 +316,7 @@ int run_tui(const fs::path& root, const Config& cfg) {
                             state.chat_history.push_back(
                                 std::string("error: ") + e.what());
                         }
+                        state.chat_scroll = 1.0f;
                         state.chat_streaming = false;
                         screen.Post(Event::Custom);
                     }).detach();
@@ -290,6 +325,7 @@ int run_tui(const fs::path& root, const Config& cfg) {
 
                 state.chat_history.push_back(user_msg);
                 state.chat_history.push_back("");
+                state.chat_scroll = 1.0f;
                 state.chat_streaming = true;
                 screen.Post(Event::Custom);
 
@@ -317,7 +353,7 @@ int run_tui(const fs::path& root, const Config& cfg) {
 
                         std::ostringstream captured;
                         const auto response = ollama.chat_stream(
-                            messages, captured);
+                            messages, captured, TaskType::Chat, state.chat_model_override);
                         if (!state.chat_history.empty()) {
                             state.chat_history.pop_back();
                         }
@@ -330,6 +366,7 @@ int run_tui(const fs::path& root, const Config& cfg) {
                         state.chat_history.push_back(
                             std::string("error: ") + e.what());
                     }
+                    state.chat_scroll = 1.0f;
                     state.chat_streaming = false;
                     screen.Post(Event::Custom);
                 }).detach();
@@ -344,14 +381,20 @@ int run_tui(const fs::path& root, const Config& cfg) {
                 state.chat_input.pop_back();
                 return true;
             }
-            if (event == Event::ArrowUp || event == Event::PageUp) {
-                if (state.chat_scroll < 100)
-                    state.chat_scroll++;
+            if (event == Event::ArrowUp) {
+                state.chat_scroll = std::clamp(state.chat_scroll - 0.05f, 0.0f, 1.0f);
                 return true;
             }
-            if (event == Event::ArrowDown || event == Event::PageDown) {
-                if (state.chat_scroll > 0)
-                    state.chat_scroll--;
+            if (event == Event::ArrowDown) {
+                state.chat_scroll = std::clamp(state.chat_scroll + 0.05f, 0.0f, 1.0f);
+                return true;
+            }
+            if (event == Event::PageUp) {
+                state.chat_scroll = std::clamp(state.chat_scroll - 0.2f, 0.0f, 1.0f);
+                return true;
+            }
+            if (event == Event::PageDown) {
+                state.chat_scroll = std::clamp(state.chat_scroll + 0.2f, 0.0f, 1.0f);
                 return true;
             }
         }
@@ -364,14 +407,6 @@ int run_tui(const fs::path& root, const Config& cfg) {
             }
             if (event == Event::ArrowDown || event == Event::ArrowRight) {
                 state.patches_selected_index++;
-                return true;
-            }
-            if (event == Event::Character('a') &&
-                state.patches_confirm_visible) {
-                return true;
-            }
-            if (event == Event::Character('r') &&
-                state.patches_confirm_visible) {
                 return true;
             }
             if (event == Event::Character('a')) {

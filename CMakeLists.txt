@@ -127,6 +127,7 @@ if(ULTRACODE_USE_TUI)
         src/tui/views/index.cpp
         src/tui/views/patches.cpp
         src/tui/components/status_bar.cpp
+        src/tui/markdown_renderer.cpp
     )
     set(ULTRACODE_TUI_LIBS
         ftxui::dom
