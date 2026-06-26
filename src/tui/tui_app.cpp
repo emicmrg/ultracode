@@ -85,15 +85,20 @@ std::string build_plan_system_prompt() {
 }
 
 std::string context_blocks_xml(const std::vector<RankedChunk>& ranked,
-                                int max_chars) {
+                                int max_chars,
+                                int max_chunk_lines) {
     std::ostringstream ctx;
     int used = 0;
     for (const auto& r : ranked) {
+        std::string content = r.content;
+        if (max_chunk_lines > 0) {
+            content = truncate_lines(content, max_chunk_lines);
+        }
         std::ostringstream block;
         block << "<chunk path=\"" << r.chunk.path << "\" lines=\""
               << r.chunk.start_line << "-" << r.chunk.end_line
               << "\" symbol=\"" << r.chunk.symbol << "\">\n"
-              << r.content << "\n</chunk>\n\n";
+              << content << "\n</chunk>\n\n";
         const std::string rendered = block.str();
         if (used + static_cast<int>(rendered.size()) > max_chars) {
             break;
@@ -308,7 +313,7 @@ int run_tui(const fs::path& root, const Config& cfg) {
                                 root, cfg, instruction, cfg.top_k,
                                 diff_ctx.changed_paths);
                             const std::string ctx = context_blocks_xml(
-                                ranked, cfg.max_context_chars);
+                                ranked, cfg.max_context_chars, cfg.max_chunk_lines);
 
                             OllamaClient ollama(cfg);
                             std::string user = "Requested change:\n" + instruction +
@@ -423,7 +428,7 @@ int run_tui(const fs::path& root, const Config& cfg) {
                                 const auto ranked = retrieve(
                                     root, cfg, instruction, cfg.top_k,
                                     diff_ctx.changed_paths);
-                                ctx = context_blocks_xml(ranked, cfg.max_context_chars);
+                                ctx = context_blocks_xml(ranked, cfg.max_context_chars, cfg.max_chunk_lines);
                             }
 
                             OllamaClient ollama(cfg);
@@ -514,7 +519,7 @@ int run_tui(const fs::path& root, const Config& cfg) {
                             root, cfg, user_msg, cfg.top_k,
                             diff_ctx.changed_paths);
                         const std::string ctx = context_blocks_xml(
-                            ranked, cfg.max_context_chars);
+                            ranked, cfg.max_context_chars, cfg.max_chunk_lines);
 
                         OllamaClient ollama(cfg);
                         std::vector<ChatMessage> messages;

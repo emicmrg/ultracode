@@ -87,6 +87,17 @@ inline std::string join_lines(const std::vector<std::string>& lines,
     return ss.str();
 }
 
+inline std::string truncate_lines(const std::string& text, int max_lines) {
+    if (max_lines <= 0) return text;
+    auto lines = split_lines(text);
+    if (static_cast<int>(lines.size()) <= max_lines) return text;
+    lines.resize(static_cast<size_t>(max_lines));
+    std::string result;
+    for (const auto& line : lines) result += line + '\n';
+    result += "...\n";
+    return result;
+}
+
 inline std::string json_escape(const std::string& s) {
     std::ostringstream out;
     for (unsigned char c : s) {

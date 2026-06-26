@@ -27,6 +27,7 @@ std::string default_config_json() {
   "develop_model": "gemma4-more-context:e4b",
   "top_k": 8,
   "max_context_chars": 24000,
+  "max_chunk_lines": 50,
   "embedding_batch_size": 16,
   "fallback_embedding_dim": 256,
   "notes": "This MVP uses Ollama /api/embed and /api/chat. If Ollama is unavailable, indexing falls back to local hashed embeddings."
@@ -66,6 +67,7 @@ Config load_config(const fs::path& root) {
     if (auto v = string_value("develop_model"))       cfg.develop_model       = *v;
     if (auto v = int_value("top_k"))                  cfg.top_k               = *v;
     if (auto v = int_value("max_context_chars"))      cfg.max_context_chars   = *v;
+    if (auto v = int_value("max_chunk_lines"))        cfg.max_chunk_lines     = *v;
     if (auto v = int_value("embedding_batch_size"))   cfg.embedding_batch_size = *v;
     if (auto v = int_value("fallback_embedding_dim")) cfg.fallback_embedding_dim = *v;
 

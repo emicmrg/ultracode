@@ -409,11 +409,15 @@ int cmd_ask(const fs::path& root,
         used += static_cast<int>(file_block.size());
     }
     for (const auto& r : ranked) {
+        std::string content = r.content;
+        if (cfg.max_chunk_lines > 0) {
+            content = truncate_lines(content, cfg.max_chunk_lines);
+        }
         std::ostringstream block;
         block << "<chunk path=\"" << r.chunk.path << "\" lines=\""
               << r.chunk.start_line << "-" << r.chunk.end_line
               << "\" symbol=\"" << r.chunk.symbol << "\">\n"
-              << r.content << "\n</chunk>\n\n";
+              << content << "\n</chunk>\n\n";
         const std::string rendered = block.str();
         if (used + static_cast<int>(rendered.size()) > cfg.max_context_chars) {
             break;
@@ -467,11 +471,15 @@ int cmd_patch(const fs::path& root,
                       << " score=" << std::fixed << std::setprecision(3) << r.score
                       << " vec=" << r.vector_score
                       << " lex=" << r.lexical_score << '\n';
+        std::string content = r.content;
+        if (cfg.max_chunk_lines > 0) {
+            content = truncate_lines(content, cfg.max_chunk_lines);
+        }
         std::ostringstream block;
         block << "<chunk path=\"" << r.chunk.path << "\" lines=\""
               << r.chunk.start_line << "-" << r.chunk.end_line
               << "\" symbol=\"" << r.chunk.symbol << "\">\n"
-              << r.content << "\n</chunk>\n\n";
+              << content << "\n</chunk>\n\n";
         const std::string rendered = block.str();
         if (used + static_cast<int>(rendered.size()) > cfg.max_context_chars) {
             break;

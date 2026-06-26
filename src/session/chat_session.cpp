@@ -34,15 +34,20 @@ struct SessionState {
 };
 
 std::string render_context_blocks(const std::vector<RankedChunk>& ranked,
-                                  int max_context_chars) {
+                                  int max_context_chars,
+                                  int max_chunk_lines) {
     std::ostringstream ctx;
     int used = 0;
     for (const auto& r : ranked) {
+        std::string content = r.content;
+        if (max_chunk_lines > 0) {
+            content = truncate_lines(content, max_chunk_lines);
+        }
         std::ostringstream block;
         block << "<chunk path=\"" << r.chunk.path << "\" lines=\""
               << r.chunk.start_line << "-" << r.chunk.end_line
               << "\" symbol=\"" << r.chunk.symbol << "\">\n"
-              << r.content << "\n</chunk>\n\n";
+              << content << "\n</chunk>\n\n";
         const std::string rendered = block.str();
         if (used + static_cast<int>(rendered.size()) > max_context_chars) {
             break;
@@ -139,7 +144,7 @@ int run_interactive_chat(const std::filesystem::path& root,
             messages.push_back(message);
         }
 
-        const std::string context = render_context_blocks(ranked, cfg.max_context_chars);
+        const std::string context = render_context_blocks(ranked, cfg.max_context_chars, cfg.max_chunk_lines);
         messages.push_back(ChatMessage{
             "user",
             "Question:\n" + line +

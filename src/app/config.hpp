@@ -28,6 +28,7 @@ struct Config {
     std::string develop_model       = "gemma4-more-context:e4b";
     int top_k                       = 8;
     int max_context_chars           = 24000;
+    int max_chunk_lines             = 50;
     int embedding_batch_size        = 16;
     int fallback_embedding_dim      = 256;
     std::vector<std::string> ignore_dirs = {
