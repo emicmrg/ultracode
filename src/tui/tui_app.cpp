@@ -14,6 +14,7 @@
 
 #include "tui/tui_app.hpp"
 
+#include "plan/plan_parser.hpp"
 #include "tui/components/status_bar.hpp"
 #include "tui/views/context.hpp"
 #include "tui/views/chat.hpp"
@@ -60,6 +61,27 @@ std::string build_patch_system_prompt() {
         "patch. Do not include markdown fences, prose, bullets, explanations, "
         "or code outside the patch. Every file change must include diff --git, "
         "---, +++, and @@ hunk headers.";
+}
+
+std::string build_plan_system_prompt() {
+    return
+        "You are a software architect. Analyze the codebase context and create a plan "
+        "to implement the requested change.\n\n"
+        "Return ONLY a JSON object with this exact structure:\n"
+        "{\n"
+        "  \"steps\": [\n"
+        "    {\n"
+        "      \"file\": \"relative/path/to/file\",\n"
+        "      \"reason\": \"why this file needs changes\",\n"
+        "      \"changes\": [\"description of change 1\"]\n"
+        "    }\n"
+        "  ],\n"
+        "  \"files_needed\": [\"file1\", \"file2\"]\n"
+        "}\n\n"
+        "Rules:\n"
+        "- Only propose changes to files present in the context\n"
+        "- Do not invent new files unless strictly necessary\n"
+        "- Keep reasons and changes concise";
 }
 
 std::string context_blocks_xml(const std::vector<RankedChunk>& ranked,
@@ -193,6 +215,26 @@ int run_tui(const fs::path& root, const Config& cfg) {
             return true;
         }
 
+        // Plan approval
+        if (state.plan_visible && state.active_tab == Tab::Chat) {
+            if (event == Event::Character('y') || event == Event::Character('Y')) {
+                state.plan_visible = false;
+                state.chat_history.push_back("Plan approved. Use `/patch " + state.plan_instruction + "` to generate changes.");
+                state.chat_scroll = 1.0f;
+                screen.Post(Event::Custom);
+                return true;
+            }
+            if (event == Event::Character('n') || event == Event::Character('N')) {
+                state.plan_visible = false;
+                state.current_plan = PlanResult{};
+                state.plan_instruction.clear();
+                state.chat_history.push_back("Plan rejected.");
+                state.chat_scroll = 1.0f;
+                screen.Post(Event::Custom);
+                return true;
+            }
+        }
+
         // Escape to quit TUI
         if (event == Event::Escape) {
             screen.ExitLoopClosure()();
@@ -230,6 +272,16 @@ int run_tui(const fs::path& root, const Config& cfg) {
                     }
                 }
 
+                bool is_plan = false;
+                std::string plan_instruction;
+                {
+                    const std::string prefix6 = user_msg.size() >= 6 ? lower(user_msg.substr(0, 6)) : "";
+                    if (prefix6 == "/plan ") {
+                        is_plan = true;
+                        plan_instruction = trim(user_msg.substr(6));
+                    }
+                }
+
                 bool is_patch = false;
                 std::string patch_instruction;
                 {
@@ -238,6 +290,91 @@ int run_tui(const fs::path& root, const Config& cfg) {
                         is_patch = true;
                         patch_instruction = trim(user_msg.substr(7));
                     }
+                }
+
+                if (is_plan) {
+                    std::string instruction = plan_instruction;
+                    state.chat_history.push_back("/plan " + instruction);
+                    state.chat_history.push_back("generating plan...");
+                    state.chat_scroll = 1.0f;
+                    state.chat_streaming = true;
+                    screen.Post(Event::Custom);
+
+                    std::thread([&, root, cfg, instruction] {
+                        try {
+                            const auto diff_ctx = load_repo_diff_context(
+                                root, cfg.max_context_chars / 3);
+                            const auto ranked = retrieve(
+                                root, cfg, instruction, cfg.top_k,
+                                diff_ctx.changed_paths);
+                            const std::string ctx = context_blocks_xml(
+                                ranked, cfg.max_context_chars);
+
+                            OllamaClient ollama(cfg);
+                            std::string user = "Requested change:\n" + instruction +
+                                "\n\nRelevant code context:\n" + ctx;
+                            if (!diff_ctx.diff_text.empty()) {
+                                user += "\nWorking tree diff:\n" + diff_ctx.diff_text;
+                            }
+
+                            const std::string raw = ollama.chat(
+                                std::vector<ChatMessage>{
+                                    ChatMessage{"system", build_plan_system_prompt()},
+                                    ChatMessage{"user", user}
+                                },
+                                TaskType::Plan);
+                            
+                            PlanResult plan = parse_plan_from_response(raw);
+                            
+                            if (!state.chat_history.empty()) {
+                                state.chat_history.pop_back();
+                            }
+                            
+                            if (!plan.valid) {
+                                state.chat_history.push_back("plan error: " + plan.error);
+                                const int trunc = std::min(400, static_cast<int>(raw.size()));
+                                state.chat_history.push_back(
+                                    "raw output: " + raw.substr(0, static_cast<size_t>(trunc)) +
+                                    (static_cast<int>(raw.size()) > trunc ? "..." : ""));
+                            } else {
+                                state.current_plan = std::move(plan);
+                                state.plan_instruction = instruction;
+                                state.plan_visible = true;
+                                
+                                // Render plan as markdown text
+                                std::ostringstream plan_text;
+                                plan_text << "## Plan: " << instruction << "\n\n";
+                                for (size_t i = 0; i < state.current_plan.steps.size(); ++i) {
+                                    const auto& step = state.current_plan.steps[i];
+                                    plan_text << "### Step " << (i + 1) << ": `" << step.file << "`\n\n";
+                                    plan_text << "**Reason:** " << step.reason << "\n\n";
+                                    plan_text << "**Changes:**\n";
+                                    for (const auto& change : step.changes) {
+                                        plan_text << "- " << change << "\n";
+                                    }
+                                    plan_text << "\n";
+                                }
+                                plan_text << "**Files needed:** ";
+                                for (size_t i = 0; i < state.current_plan.files_needed.size(); ++i) {
+                                    if (i > 0) plan_text << ", ";
+                                    plan_text << "`" << state.current_plan.files_needed[i] << "`";
+                                }
+                                plan_text << "\n\n**Approve plan?** [y]es / [n]o";
+                                
+                                state.chat_history.push_back(plan_text.str());
+                            }
+                        } catch (const std::exception& e) {
+                            if (!state.chat_history.empty()) {
+                                state.chat_history.pop_back();
+                            }
+                            state.chat_history.push_back(
+                                std::string("error: ") + e.what());
+                        }
+                        state.chat_scroll = 1.0f;
+                        state.chat_streaming = false;
+                        screen.Post(Event::Custom);
+                    }).detach();
+                    return true;
                 }
 
                 if (is_patch) {

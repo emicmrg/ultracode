@@ -16,6 +16,7 @@
 
 #include "app/config.hpp"
 #include "parsing/chunk.hpp"
+#include "plan/plan_parser.hpp"
 
 #include <filesystem>
 #include <string>
@@ -49,6 +50,10 @@ struct TuiState {
     std::string patches_confirm_action;
     bool patches_confirm_visible = false;
     std::string patches_error;
+
+    PlanResult current_plan;
+    bool plan_visible = false;
+    std::string plan_instruction;
 
     std::string status_text;
     bool ollama_connected = false;

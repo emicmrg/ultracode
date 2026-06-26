@@ -147,6 +147,7 @@ set(ULTRACODE_LIB_SOURCES
     src/index/repo_scanner.cpp
     src/llm/ollama_client.cpp
     src/parsing/chunk_extractor.cpp
+    src/plan/plan_parser.cpp
     src/retrieval/retriever.cpp
     src/session/chat_session.cpp
     src/vcs/git_diff.cpp
