@@ -144,7 +144,7 @@ std::vector<ParsedBlock> parse_search_replace_blocks(const std::string& text) {
 
     while (pos < text.size()) {
         size_t file_pos = text.find("File: ", pos);
-        size_t search_pos = text.find("<<<<<<< SEARCH", pos);
+        size_t search_pos = text.find("<<<<<<<", pos);
 
         if (search_pos == std::string::npos) break;
 
@@ -160,27 +160,29 @@ std::vector<ParsedBlock> parse_search_replace_blocks(const std::string& text) {
         }
 
         size_t mid_pos = text.find("=======", search_pos);
-        size_t end_pos = text.find(">>>>>>> REPLACE", mid_pos);
-
-        if (mid_pos == std::string::npos || end_pos == std::string::npos) {
-            break; // Malformed block
-        }
+        if (mid_pos == std::string::npos) break;
+        
+        size_t end_pos = text.find(">>>>>>>", mid_pos);
+        if (end_pos == std::string::npos) break;
 
         ParsedBlock block;
         block.file_path = current_file;
         block.start_pos = search_pos;
         
-        size_t search_content_start = search_pos + 14;
-        if (text[search_content_start] == '\n') search_content_start++;
+        // Find end of marker lines to extract the inner content perfectly
+        size_t search_content_start = text.find('\n', search_pos);
+        if (search_content_start == std::string::npos) break;
+        search_content_start++; // Skip newline
         
         size_t search_content_end = mid_pos;
-        if (text[search_content_end - 1] == '\n') search_content_end--;
+        if (search_content_end > 0 && text[search_content_end - 1] == '\n') search_content_end--;
 
-        size_t replace_content_start = mid_pos + 7;
-        if (text[replace_content_start] == '\n') replace_content_start++;
+        size_t replace_content_start = text.find('\n', mid_pos);
+        if (replace_content_start == std::string::npos) break;
+        replace_content_start++; // Skip newline
 
         size_t replace_content_end = end_pos;
-        if (text[replace_content_end - 1] == '\n') replace_content_end--;
+        if (replace_content_end > 0 && text[replace_content_end - 1] == '\n') replace_content_end--;
 
         block.search_text = text.substr(search_content_start, search_content_end - search_content_start);
         block.replace_text = text.substr(replace_content_start, replace_content_end - replace_content_start);
