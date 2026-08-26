@@ -492,9 +492,20 @@ int cmd_patch(const fs::path& root,
     debug.git_diff_chars = static_cast<int>(diff_context.diff_text.size());
 
     const std::string system =
-        "You are a local coding assistant. Return only a complete unified diff patch. "
-        "Do not include markdown fences, prose, bullets, explanations, or code outside the patch. "
-        "Every file change must include diff --git, ---, +++, and @@ hunk headers.";
+        "You are a local coding assistant. To modify code, you MUST use the SEARCH/REPLACE block format.\n"
+        "For each file you want to modify, output a block formatted exactly like this:\n\n"
+        "File: path/to/target/file.ext\n"
+        "<<<<<<< SEARCH\n"
+        "[exact lines to replace from the original file]\n"
+        "=======\\n"
+        "[new lines to insert]\n"
+        ">>>>>>> REPLACE\n\n"
+        "CRITICAL RULES:\n"
+        "1. The SEARCH block must match the original file EXACTLY, character-for-character.\n"
+        "2. Include enough context lines in the SEARCH block to make it unique.\n"
+        "3. Do not output unified diffs with + or - signs.\n"
+        "4. Do not output line numbers.";
+        
     std::string user =
         "Requested change:\n" + instruction +
         "\n\nRelevant code context:\n" + ctx.str() +
@@ -502,7 +513,7 @@ int cmd_patch(const fs::path& root,
         "- Modify only files that are necessary for the request.\n"
         "- Preserve the existing coding style and schema.\n"
         "- If adding repeated entries, add all requested entries, not a partial subset.\n"
-        "- Return only a valid unified diff.\n";
+        "- Return only valid SEARCH/REPLACE blocks.\n";
     if (!normalized_file_target.empty()) {
         user += "- The primary file to modify is " + normalized_file_target + ".\n"
                 "- Prefer changing only that file unless the request strictly requires more.\n";
@@ -512,12 +523,20 @@ int cmd_patch(const fs::path& root,
     }
     const std::string full_prompt = "SYSTEM:\n" + system + "\n\nUSER:\n" + user;
     const OllamaClient ollama(cfg);
-    const std::string raw_model_output = ollama.chat(
+    
+    std::cout << "\n\033[36mThinking... (streaming model output)\033[0m\n";
+    std::cout << "--------------------------------------\n";
+    
+    const std::string raw_model_output = ollama.chat_stream(
         std::vector<ChatMessage>{
             ChatMessage{"system", system},
             ChatMessage{"user", user}
         },
-        TaskType::Develop);
+        std::cout,
+        TaskType::Develop
+    );
+    
+    std::cout << "\n--------------------------------------\n";
     const std::string diff_text = sanitize_patch_text(raw_model_output);
     debug.model_output_chars = static_cast<int>(raw_model_output.size());
     debug.sanitized_patch_chars = static_cast<int>(diff_text.size());
