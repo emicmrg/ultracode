@@ -57,10 +57,19 @@ std::string build_chat_system_prompt() {
 
 std::string build_patch_system_prompt() {
     return
-        "You are a local coding assistant. Return only a complete unified diff "
-        "patch. Do not include markdown fences, prose, bullets, explanations, "
-        "or code outside the patch. Every file change must include diff --git, "
-        "---, +++, and @@ hunk headers.";
+        "You are a local coding assistant. To modify code, you MUST use the SEARCH/REPLACE block format.\n"
+        "For each file you want to modify, output a block formatted exactly like this:\n\n"
+        "File: path/to/target/file.ext\n"
+        "<<<<<<< SEARCH\n"
+        "[exact lines to replace from the original file]\n"
+        "=======\n"
+        "[new lines to insert]\n"
+        ">>>>>>> REPLACE\n\n"
+        "CRITICAL RULES:\n"
+        "1. The SEARCH block must match the original file EXACTLY, character-for-character.\n"
+        "2. Include enough context lines in the SEARCH block to make it unique.\n"
+        "3. Do not output unified diffs with + or - signs.\n"
+        "4. Do not output line numbers.";
 }
 
 std::string build_plan_system_prompt() {
@@ -437,7 +446,7 @@ int run_tui(const fs::path& root, const Config& cfg) {
                                 "\n\nPatch requirements:\n"
                                 "- Modify only files that are necessary.\n"
                                 "- Preserve existing coding style.\n"
-                                "- Return only a valid unified diff.\n";
+                                "- Return only valid SEARCH/REPLACE blocks.\n";
                             if (has_plan) {
                                 user += "- You MUST follow the approved plan above.\n"
                                         "- Only modify the files listed in the plan.\n";

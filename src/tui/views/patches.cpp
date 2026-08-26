@@ -100,17 +100,38 @@ Element render_patches_view(TuiState& state,
         Elements diff_lines;
         std::stringstream ss(diff_text);
         std::string line;
+        
+        int render_state = 0; // 0 = normal, 1 = search (old), 2 = replace (new)
+        
         while (std::getline(ss, line)) {
-            if (line.empty()) {
-                diff_lines.push_back(text(""));
-            } else if (line[0] == '+') {
-                diff_lines.push_back(text(line) | color(Color::Green));
-            } else if (line[0] == '-') {
-                diff_lines.push_back(text(line) | color(Color::Red));
-            } else if (line[0] == '@') {
-                diff_lines.push_back(text(line) | color(Color::Cyan));
+            if (line.find("<<<<<<< SEARCH") != std::string::npos) {
+                render_state = 1;
+                diff_lines.push_back(text(line) | color(Color::Cyan) | bold);
+            } else if (line.find("=======") != std::string::npos) {
+                render_state = 2;
+                diff_lines.push_back(text(line) | color(Color::Cyan) | bold);
+            } else if (line.find(">>>>>>> REPLACE") != std::string::npos) {
+                render_state = 0;
+                diff_lines.push_back(text(line) | color(Color::Cyan) | bold);
+            } else if (render_state == 1) {
+                diff_lines.push_back(text("- " + line) | color(Color::Red));
+            } else if (render_state == 2) {
+                diff_lines.push_back(text("+ " + line) | color(Color::Green));
             } else {
-                diff_lines.push_back(text(line) | dim);
+                // Fallback normal mode (for standard diffs or outer context)
+                if (line.empty()) {
+                    diff_lines.push_back(text(""));
+                } else if (line[0] == '+') {
+                    diff_lines.push_back(text(line) | color(Color::Green));
+                } else if (line[0] == '-') {
+                    diff_lines.push_back(text(line) | color(Color::Red));
+                } else if (line[0] == '@') {
+                    diff_lines.push_back(text(line) | color(Color::Cyan));
+                } else if (line.rfind("File: ", 0) == 0) {
+                    diff_lines.push_back(text(line) | bold);
+                } else {
+                    diff_lines.push_back(text(line) | dim);
+                }
             }
         }
 

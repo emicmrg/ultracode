@@ -15,30 +15,34 @@
 #include "llm/ollama_client.hpp"
 
 #include "support/utils.hpp"
+#include "support/json.hpp"
 
 #include <cstdio>
 #include <ostream>
 #include <sstream>
 #include <utility>
+#include <iostream>
+
+using json = nlohmann::json;
 
 namespace {
 
 std::string build_chat_payload(const std::vector<ChatMessage>& messages,
                                const std::string& model_name,
                                bool stream) {
-    std::ostringstream payload;
-    payload << "{\"model\":\"" << json_escape(model_name)
-            << "\",\"stream\":" << (stream ? "true" : "false")
-            << ",\"keep_alive\":\"10m\",\"messages\":[";
-    for (size_t i = 0; i < messages.size(); ++i) {
-        if (i) {
-            payload << ',';
-        }
-        payload << "{\"role\":\"" << json_escape(messages[i].role)
-                << "\",\"content\":\"" << json_escape(messages[i].content) << "\"}";
+    json payload;
+    payload["model"] = model_name;
+    payload["stream"] = stream;
+    payload["keep_alive"] = "10m";
+    payload["messages"] = json::array();
+    
+    for (const auto& msg : messages) {
+        payload["messages"].push_back({
+            {"role", msg.role},
+            {"content", msg.content}
+        });
     }
-    payload << "]}";
-    return payload.str();
+    return payload.dump();
 }
 
 std::string resolve_model_name(const Config& config, TaskType task, const std::string& override_name) {
@@ -64,38 +68,55 @@ std::vector<std::vector<float>> OllamaClient::embed_batch(
         return {};
     }
 
-    std::ostringstream payload;
-    payload << "{\"model\":\"" << json_escape(config_.embedding_model)
-            << "\",\"input\":[";
-    for (size_t i = 0; i < inputs.size(); ++i) {
-        if (i) {
-            payload << ',';
-        }
-        payload << "\"" << json_escape(inputs[i]) << "\"";
-    }
-    payload << "],\"keep_alive\":\"1m\"}";
+    json payload;
+    payload["model"] = config_.embedding_model;
+    payload["input"] = inputs;
+    payload["keep_alive"] = "1m";
 
     const std::string cmd =
         "curl -sS --max-time 180 -H 'Content-Type: application/json' " +
         shell_quote(config_.ollama_url + "/api/embed") +
-        " -d " + shell_quote(payload.str()) + " 2>/dev/null";
-    auto embeddings = parse_embeddings(run_command_capture(cmd));
+        " -d " + shell_quote(payload.dump()) + " 2>/dev/null";
+        
+    std::string response = run_command_capture(cmd);
+    std::vector<std::vector<float>> embeddings;
+    
+    try {
+        auto j = json::parse(response);
+        if (j.contains("embeddings") && j["embeddings"].is_array()) {
+            embeddings = j["embeddings"].get<std::vector<std::vector<float>>>();
+        }
+    } catch (...) {}
+    
     if (embeddings.size() == inputs.size()) {
         return embeddings;
     }
 
+    // Fallback: 1 by 1
     embeddings.clear();
     embeddings.reserve(inputs.size());
     for (const auto& input : inputs) {
-        const std::string single_payload =
-            "{\"model\":\"" + json_escape(config_.embedding_model) +
-            "\",\"input\":\"" + json_escape(input) +
-            "\",\"keep_alive\":\"1m\"}";
+        json single_payload;
+        single_payload["model"] = config_.embedding_model;
+        single_payload["input"] = input;
+        single_payload["keep_alive"] = "1m";
+
         const std::string single_cmd =
             "curl -sS --max-time 180 -H 'Content-Type: application/json' " +
             shell_quote(config_.ollama_url + "/api/embed") +
-            " -d " + shell_quote(single_payload) + " 2>/dev/null";
-        embeddings.push_back(parse_first_embedding(run_command_capture(single_cmd)));
+            " -d " + shell_quote(single_payload.dump()) + " 2>/dev/null";
+            
+        std::string single_resp = run_command_capture(single_cmd);
+        try {
+            auto j = json::parse(single_resp);
+            if (j.contains("embeddings") && j["embeddings"].is_array() && !j["embeddings"].empty()) {
+                embeddings.push_back(j["embeddings"][0].get<std::vector<float>>());
+            } else {
+                embeddings.push_back({});
+            }
+        } catch (...) {
+            embeddings.push_back({});
+        }
     }
     return embeddings;
 }
@@ -115,13 +136,22 @@ std::string OllamaClient::chat(const std::vector<ChatMessage>& messages,
                                 const std::string& model_override) const {
     const std::string payload = build_chat_payload(
         messages, resolve_model_name(config_, task, model_override), false);
+        
     const std::string cmd =
-        "curl -sS --max-time 300 -H 'Content-Type: application/json' " +
+        "curl -sS -H 'Content-Type: application/json' " +
         shell_quote(config_.ollama_url + "/api/chat") +
         " -d " + shell_quote(payload) + " 2>/dev/null";
+        
     const std::string response = run_command_capture(cmd);
-    auto content = extract_json_string_after_key(response, "\"content\"");
-    return content.value_or(response);
+    
+    try {
+        auto j = json::parse(response);
+        if (j.contains("message") && j["message"].contains("content")) {
+            return j["message"]["content"].get<std::string>();
+        }
+    } catch (...) {}
+    
+    return response;
 }
 
 std::string OllamaClient::chat_stream(const std::vector<ChatMessage>& messages,
@@ -136,8 +166,9 @@ std::string OllamaClient::chat_stream(const std::vector<ChatMessage>& messages,
                                       const std::string& model_override) const {
     const std::string payload = build_chat_payload(
         messages, resolve_model_name(config_, task, model_override), true);
+        
     const std::string cmd =
-        "curl -sS -N --max-time 300 -H 'Content-Type: application/json' " +
+        "curl -sS -N -H 'Content-Type: application/json' " +
         shell_quote(config_.ollama_url + "/api/chat") +
         " -d " + shell_quote(payload) + " 2>/dev/null";
 
@@ -154,13 +185,19 @@ std::string OllamaClient::chat_stream(const std::vector<ChatMessage>& messages,
     std::string full_response;
     while (fgets(buffer.data(), static_cast<int>(buffer.size()), pipe) != nullptr) {
         const std::string line(buffer.data());
-        auto content = extract_json_string_after_key(line, "\"content\"");
-        if (!content.has_value() || content->empty()) {
-            continue;
+        try {
+            auto j = json::parse(line);
+            if (j.contains("message") && j["message"].contains("content")) {
+                std::string content = j["message"]["content"].get<std::string>();
+                if (!content.empty()) {
+                    out << content;
+                    out.flush();
+                    full_response += content;
+                }
+            }
+        } catch (...) {
+            // Partial JSON or other output, ignore and continue
         }
-        out << *content;
-        out.flush();
-        full_response += *content;
     }
 
 #ifdef _WIN32

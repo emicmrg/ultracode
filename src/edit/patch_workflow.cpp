@@ -112,65 +112,83 @@ bool update_patch_status(const fs::path& root,
     return write_patch_meta(root, *proposal);
 }
 
-std::string build_apply_check_command(const fs::path& root, const fs::path& patch_path) {
-    return "git -C " + shell_quote(root.string()) +
-           " apply --check " + shell_quote(patch_path.string()) + " 2>&1";
-}
-
-bool looks_like_diff_line(const std::string& line) {
-    return line.rfind("diff --git ", 0) == 0 ||
-           line.rfind("--- ", 0) == 0;
-}
-
 }  // namespace
 
 std::string sanitize_patch_text(const std::string& model_output) {
+    // Para SEARCH/REPLACE, no queremos eliminar las etiquetas, 
+    // pero podemos limpiar bloques markdown genéricos si el modelo los añadió.
     std::string text = trim(model_output);
-    const size_t diff_block = text.find("```diff");
-    const size_t plain_block = text.find("```");
+    const size_t diff_block = text.find("```");
     if (diff_block != std::string::npos) {
-        const size_t start = text.find('\n', diff_block);
-        if (start != std::string::npos) {
-            const size_t end = text.find("```", start + 1);
-            text = trim(text.substr(start + 1, end == std::string::npos ? std::string::npos : end - start - 1));
-        }
-    } else if (plain_block != std::string::npos) {
-        const size_t start = text.find('\n', plain_block);
-        if (start != std::string::npos) {
-            const size_t end = text.find("```", start + 1);
-            text = trim(text.substr(start + 1, end == std::string::npos ? std::string::npos : end - start - 1));
+        // Solo extraemos si hay un SEARCH block adentro
+        if (text.find("<<<<<<< SEARCH") != std::string::npos) {
+            // Do not strip markdown blindly if it breaks the block, 
+            // but usually we can just return the raw text as our parser is robust.
+            return text;
         }
     }
-
-    std::stringstream ss(text);
-    std::string line;
-    std::vector<std::string> lines;
-    bool started = false;
-    while (std::getline(ss, line)) {
-        if (!started && looks_like_diff_line(line)) {
-            started = true;
-        }
-        if (started) {
-            lines.push_back(line);
-        }
-    }
-
-    if (!lines.empty()) {
-        std::ostringstream out;
-        for (size_t i = 0; i < lines.size(); ++i) {
-            if (i) {
-                out << '\n';
-            }
-            out << lines[i];
-        }
-        text = trim(out.str());
-    }
-
-    if (!text.empty() && text.back() != '\n') {
-        text += '\n';
-    }
-
     return text;
+}
+
+struct ParsedBlock {
+    std::string file_path;
+    std::string search_text;
+    std::string replace_text;
+    size_t start_pos;
+};
+
+std::vector<ParsedBlock> parse_search_replace_blocks(const std::string& text) {
+    std::vector<ParsedBlock> blocks;
+    size_t pos = 0;
+    std::string current_file;
+
+    while (pos < text.size()) {
+        size_t file_pos = text.find("File: ", pos);
+        size_t search_pos = text.find("<<<<<<< SEARCH", pos);
+
+        if (search_pos == std::string::npos) break;
+
+        // Find the nearest "File: " before this SEARCH block
+        if (file_pos != std::string::npos && file_pos < search_pos) {
+            size_t end_file = text.find('\n', file_pos);
+            if (end_file != std::string::npos) {
+                current_file = trim(text.substr(file_pos + 6, end_file - (file_pos + 6)));
+                // Strip backticks if the model added them
+                if (!current_file.empty() && current_file.front() == '`') current_file.erase(0, 1);
+                if (!current_file.empty() && current_file.back() == '`') current_file.pop_back();
+            }
+        }
+
+        size_t mid_pos = text.find("=======", search_pos);
+        size_t end_pos = text.find(">>>>>>> REPLACE", mid_pos);
+
+        if (mid_pos == std::string::npos || end_pos == std::string::npos) {
+            break; // Malformed block
+        }
+
+        ParsedBlock block;
+        block.file_path = current_file;
+        block.start_pos = search_pos;
+        
+        size_t search_content_start = search_pos + 14;
+        if (text[search_content_start] == '\n') search_content_start++;
+        
+        size_t search_content_end = mid_pos;
+        if (text[search_content_end - 1] == '\n') search_content_end--;
+
+        size_t replace_content_start = mid_pos + 7;
+        if (text[replace_content_start] == '\n') replace_content_start++;
+
+        size_t replace_content_end = end_pos;
+        if (text[replace_content_end - 1] == '\n') replace_content_end--;
+
+        block.search_text = text.substr(search_content_start, search_content_end - search_content_start);
+        block.replace_text = text.substr(replace_content_start, replace_content_end - replace_content_start);
+
+        blocks.push_back(block);
+        pos = end_pos + 15;
+    }
+    return blocks;
 }
 
 bool validate_patch_text(const fs::path& root,
@@ -181,32 +199,46 @@ bool validate_patch_text(const fs::path& root,
         return false;
     }
 
-    const bool has_git_header = diff_text.find("diff --git ") != std::string::npos;
-    const bool has_old_header = diff_text.find("\n--- ") != std::string::npos || diff_text.rfind("--- ", 0) == 0;
-    const bool has_new_header = diff_text.find("\n+++ ") != std::string::npos || diff_text.rfind("+++ ", 0) == 0;
-    const bool has_hunk = diff_text.find("\n@@ ") != std::string::npos || diff_text.rfind("@@ ", 0) == 0;
-    if ((!has_git_header && !has_old_header) || !has_new_header || !has_hunk) {
-        if (error) *error = "Model did not return a complete unified diff.";
+    auto blocks = parse_search_replace_blocks(diff_text);
+    if (blocks.empty()) {
+        if (error) *error = "Model did not return any valid SEARCH/REPLACE blocks.";
         return false;
     }
 
-    const auto target_paths = extract_patch_target_paths(diff_text);
-    if (target_paths.empty()) {
-        if (error) *error = "Patch does not contain valid target file paths.";
-        return false;
+    for (const auto& block : blocks) {
+        if (block.file_path.empty()) {
+            if (error) *error = "A SEARCH block is missing a 'File: <path>' declaration.";
+            return false;
+        }
+
+        fs::path target_file = root / block.file_path;
+        if (!fs::exists(target_file)) {
+            if (error) *error = "Target file does not exist: " + block.file_path;
+            return false;
+        }
+
+        std::string content = slurp(target_file);
+        if (content.find(block.search_text) == std::string::npos) {
+            if (error) *error = "SEARCH block not found exactly in " + block.file_path + 
+                                ". Ensure it is character-for-character identical.";
+            return false;
+        }
     }
 
-    fs::create_directories(patches_dir(root));
-    const fs::path temp_patch = patches_dir(root) / (".validate-" + fnv1a_hex(diff_text) + ".diff");
-    write_text(temp_patch, diff_text);
-    const std::string check_output = run_command_capture(build_apply_check_command(root, temp_patch));
-    std::error_code ec;
-    fs::remove(temp_patch, ec);
-    if (!check_output.empty()) {
-        if (error) *error = trim(check_output);
-        return false;
-    }
     return true;
+}
+
+std::string slugify(const std::string& text, size_t max_len = 35) {
+    std::string slug;
+    for (char c : text) {
+        if (std::isalnum(c)) slug += static_cast<char>(std::tolower(c));
+        else if (!slug.empty() && slug.back() != '-') slug += '-';
+    }
+    if (!slug.empty() && slug.back() == '-') slug.pop_back();
+    if (slug.length() > max_len) slug = slug.substr(0, max_len);
+    if (!slug.empty() && slug.back() == '-') slug.pop_back();
+    if (slug.empty()) slug = "patch";
+    return slug;
 }
 
 PatchProposal save_patch_proposal(const fs::path& root,
@@ -216,7 +248,11 @@ PatchProposal save_patch_proposal(const fs::path& root,
     fs::create_directories(patches_dir(root));
     const auto now = std::chrono::system_clock::now().time_since_epoch().count();
     PatchProposal proposal;
-    proposal.id = fnv1a_hex(instruction + diff_text + std::to_string(now));
+    
+    std::string base_id = slugify(instruction);
+    std::string hash = fnv1a_hex(instruction + diff_text + std::to_string(now)).substr(0, 4);
+    proposal.id = base_id + "-" + hash;
+    
     proposal.status = "pending";
     proposal.instruction = instruction;
     proposal.target_paths = target_paths;
@@ -249,14 +285,10 @@ std::optional<PatchProposal> load_patch_proposal(const fs::path& root,
 
 std::vector<std::string> extract_patch_target_paths(const std::string& diff_text) {
     std::set<std::string> unique_paths;
-    std::stringstream ss(diff_text);
-    std::string line;
-    while (std::getline(ss, line)) {
-        if (line.rfind("+++ b/", 0) == 0) {
-            const std::string path = line.substr(6);
-            if (is_safe_repo_relative_path(path)) {
-                unique_paths.insert(path);
-            }
+    auto blocks = parse_search_replace_blocks(diff_text);
+    for (const auto& block : blocks) {
+        if (!block.file_path.empty() && is_safe_repo_relative_path(block.file_path)) {
+            unique_paths.insert(block.file_path);
         }
     }
     return std::vector<std::string>(unique_paths.begin(), unique_paths.end());
@@ -274,32 +306,35 @@ bool apply_patch_proposal(const fs::path& root,
         if (error) *error = "Patch proposal is not pending.";
         return false;
     }
-    if (proposal->target_paths.empty()) {
-        if (error) *error = "Patch proposal has no valid target paths.";
-        return false;
-    }
-    for (const auto& path : proposal->target_paths) {
-        if (!is_safe_repo_relative_path(path)) {
-            if (error) *error = "Patch touches an unsafe path.";
+
+    const fs::path diff_path = patch_file_path(root, patch_id);
+    std::string diff_text = slurp(diff_path);
+    auto blocks = parse_search_replace_blocks(diff_text);
+
+    // Validate all blocks again before touching disk
+    for (const auto& block : blocks) {
+        fs::path target_file = root / block.file_path;
+        if (!fs::exists(target_file)) {
+            if (error) *error = "File disappeared: " + block.file_path;
+            return false;
+        }
+        std::string content = slurp(target_file);
+        if (content.find(block.search_text) == std::string::npos) {
+            if (error) *error = "Block no longer matches content in " + block.file_path;
             return false;
         }
     }
 
-    const fs::path diff_path = patch_file_path(root, patch_id);
-    const std::string quoted_root = shell_quote(root.string());
-    const std::string quoted_patch = shell_quote(diff_path.string());
-    const std::string check_output = run_command_capture(build_apply_check_command(root, diff_path));
-    if (!check_output.empty()) {
-        if (error) *error = trim(check_output);
-        return false;
-    }
-
-    const std::string apply_cmd =
-        "git -C " + quoted_root + " apply " + quoted_patch + " 2>&1";
-    const std::string apply_output = run_command_capture(apply_cmd);
-    if (!apply_output.empty()) {
-        if (error) *error = trim(apply_output);
-        return false;
+    // Apply all blocks
+    for (const auto& block : blocks) {
+        fs::path target_file = root / block.file_path;
+        std::string content = slurp(target_file);
+        
+        size_t pos = content.find(block.search_text);
+        if (pos != std::string::npos) {
+            content.replace(pos, block.search_text.length(), block.replace_text);
+            write_text(target_file, content);
+        }
     }
 
     update_patch_status(root, patch_id, "applied");

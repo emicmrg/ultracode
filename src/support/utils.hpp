@@ -149,46 +149,7 @@ inline std::string run_command_capture(const std::string& cmd) {
     return result;
 }
 
-inline std::string unescape_json_string(const std::string& s) {
-    std::string out;
-    out.reserve(s.size());
-    for (size_t i = 0; i < s.size(); ++i) {
-        if (s[i] != '\\' || i + 1 >= s.size()) { out += s[i]; continue; }
-        char n = s[++i];
-        switch (n) {
-            case 'n':  out += '\n'; break;
-            case 'r':  out += '\r'; break;
-            case 't':  out += '\t'; break;
-            case 'b':  out += '\b'; break;
-            case 'f':  out += '\f'; break;
-            case '\\': out += '\\'; break;
-            case '"':  out += '"';  break;
-            default:   out += n;   break;
-        }
-    }
-    return out;
-}
 
-inline std::optional<std::string> extract_json_string_after_key(const std::string& json,
-                                                                  const std::string& key) {
-    const size_t key_pos = json.find(key);
-    if (key_pos == std::string::npos) return std::nullopt;
-    const size_t colon = json.find(':', key_pos + key.size());
-    if (colon == std::string::npos) return std::nullopt;
-    const size_t first_quote = json.find('"', colon + 1);
-    if (first_quote == std::string::npos) return std::nullopt;
-
-    std::string value;
-    bool escaped = false;
-    for (size_t i = first_quote + 1; i < json.size(); ++i) {
-        const char c = json[i];
-        if (escaped) { value += '\\'; value += c; escaped = false; continue; }
-        if (c == '\\') { escaped = true; continue; }
-        if (c == '"') return unescape_json_string(value);
-        value += c;
-    }
-    return std::nullopt;
-}
 
 inline std::vector<std::string> tokenize(const std::string& text) {
     std::vector<std::string> tokens;
@@ -217,65 +178,4 @@ inline std::vector<float> hashed_embedding(const std::string& text, int dim) {
     return v;
 }
 
-inline std::vector<float> parse_first_embedding(const std::string& json) {
-    const size_t key = json.find("\"embeddings\"");
-    if (key == std::string::npos) return {};
-    const size_t outer = json.find('[', key);
-    if (outer == std::string::npos) return {};
-    const size_t inner = json.find('[', outer + 1);
-    if (inner == std::string::npos) return {};
-    const size_t end = json.find(']', inner + 1);
-    if (end == std::string::npos) return {};
 
-    std::string body = json.substr(inner + 1, end - inner - 1);
-    std::vector<float> values;
-    std::stringstream ss(body);
-    std::string item;
-    while (std::getline(ss, item, ',')) {
-        item = trim(item);
-        if (item.empty()) continue;
-        try { values.push_back(std::stof(item)); }
-        catch (...) { return {}; }
-    }
-    return values;
-}
-
-inline std::vector<std::vector<float>> parse_embeddings(const std::string& json) {
-    const size_t key = json.find("\"embeddings\"");
-    if (key == std::string::npos) return {};
-    const size_t outer = json.find('[', key);
-    if (outer == std::string::npos) return {};
-
-    std::vector<std::vector<float>> embeddings;
-    for (size_t i = outer + 1; i < json.size(); ++i) {
-        if (json[i] != '[') {
-            if (json[i] == ']') break;
-            continue;
-        }
-
-        const size_t start = i;
-        int depth = 1;
-        for (++i; i < json.size() && depth > 0; ++i) {
-            if (json[i] == '[') ++depth;
-            else if (json[i] == ']') --depth;
-        }
-        if (depth != 0) return {};
-
-        const size_t end = i - 1;
-        std::string body = json.substr(start + 1, end - start - 1);
-        std::vector<float> values;
-        std::stringstream ss(body);
-        std::string item;
-        while (std::getline(ss, item, ',')) {
-            item = trim(item);
-            if (item.empty()) continue;
-            try {
-                values.push_back(std::stof(item));
-            } catch (...) {
-                return {};
-            }
-        }
-        embeddings.push_back(values);
-    }
-    return embeddings;
-}
