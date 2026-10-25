@@ -33,6 +33,7 @@ std::string detect_language(const fs::path& path) {
         ext == ".c"   || ext == ".hpp"|| ext == ".h" || ext == ".hh")
         return "cpp";
     if (ext == ".go")                                   return "go";
+    if (ext == ".rs")                                   return "rust";
     if (ext == ".py")                                   return "python";
     if (ext == ".js" || ext == ".jsx")                  return "javascript";
     if (ext == ".ts" || ext == ".tsx")                  return "typescript";
@@ -163,6 +164,55 @@ static std::vector<Chunk> extract_go(const std::vector<std::string>& lines,
     return chunks;
 }
 
+// Rust: extracted at item level (fn, struct, enum, trait, union). `impl` and
+// `mod` blocks are deliberately NOT emitted as chunks of their own: wrapping
+// them would produce huge chunks that hurt retrieval. Instead, the active
+// `impl` is tracked to enrich the symbol of its methods.
+static std::vector<Chunk> extract_rust(const std::vector<std::string>& lines,
+                                        const std::string& path) {
+    std::vector<Chunk> chunks;
+    std::regex fn_re(
+        R"(^\s*(?:pub(?:\([^)]*\))?\s+)?(?:default\s+)?(?:const\s+)?(?:async\s+)?(?:unsafe\s+)?(?:extern\s+"[^"]*"\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*))");
+    std::regex type_re(
+        R"(^\s*(?:pub(?:\([^)]*\))?\s+)?(struct|enum|trait|union)\s+([A-Za-z_][A-Za-z0-9_]*))");
+    std::regex impl_re(
+        R"(^\s*impl(?:\s*<[^>]*>)?\s+([A-Za-z_][A-Za-z0-9_:]*))");
+
+    std::string current_impl;
+    for (int i = 1; i <= static_cast<int>(lines.size()); ++i) {
+        const std::string& line = lines[static_cast<size_t>(i - 1)];
+        std::smatch m;
+        std::string symbol;
+
+        if (std::regex_search(line, m, fn_re)) {
+            symbol = current_impl.empty()
+                         ? ("fn " + m[1].str() + "()")
+                         : (current_impl + "::" + m[1].str() + "()");
+        } else if (std::regex_search(line, m, type_re)) {
+            symbol = m[1].str() + " " + m[2].str();
+            current_impl.clear();
+        } else {
+            if (std::regex_search(line, m, impl_re)) current_impl = m[1].str();
+            continue;
+        }
+
+        const int end = find_brace_block_end(lines, i);
+        const std::string content = join_lines(lines, i, end);
+        Chunk c;
+        c.path       = path;
+        c.language   = "rust";
+        c.symbol     = symbol;
+        c.start_line = i;
+        c.end_line   = end;
+        c.hash       = fnv1a_hex(path + content);
+        c.id         = c.hash;
+        chunks.push_back(c);
+        i = end;
+    }
+    if (chunks.empty()) return chunk_by_lines(lines, path, "rust");
+    return chunks;
+}
+
 static int indentation(const std::string& line) {
     int n = 0;
     for (char c : line) {
@@ -251,6 +301,7 @@ std::vector<Chunk> HeuristicExtractor::extract(const std::string& content,
     if (language == "cpp" || language == "javascript" || language == "typescript")
         return extract_cpp_like(lines, path, language);
     if (language == "go")       return extract_go(lines, path);
+    if (language == "rust")     return extract_rust(lines, path);
     if (language == "python")   return extract_python(lines, path);
     if (language == "markdown") return extract_markdown(lines, path);
     return chunk_by_lines(lines, path, language.empty() ? "text" : language);

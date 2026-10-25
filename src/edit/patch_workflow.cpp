@@ -313,6 +313,14 @@ bool apply_patch_proposal(const fs::path& root,
     std::string diff_text = slurp(diff_path);
     auto blocks = parse_search_replace_blocks(diff_text);
 
+    // With no blocks there is nothing to apply. Without this guard the patch was
+    // marked as "applied" without touching any file: a silent no-op that also
+    // consumed the proposal (it stops being 'pending' and cannot be retried).
+    if (blocks.empty()) {
+        if (error) *error = "Patch proposal has no valid target paths.";
+        return false;
+    }
+
     // Validate all blocks again before touching disk
     for (const auto& block : blocks) {
         fs::path target_file = root / block.file_path;

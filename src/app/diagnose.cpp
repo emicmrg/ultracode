@@ -45,6 +45,8 @@ double cosine(const std::vector<float>& a, const std::vector<float>& b) {
     return dot_product(a, b) / n;
 }
 
+}  // namespace
+
 bool check_ollama_reachable(const std::string& url) {
     const std::string cmd = "curl -sS --max-time 5 -o /dev/null -w '%{http_code}' "
             + shell_quote(url) + " 2>/dev/null";
@@ -53,20 +55,23 @@ bool check_ollama_reachable(const std::string& url) {
 }
 
 bool check_model_available(const std::string& url, const std::string& model) {
+    // The payload goes through shell_quote: it used to be interpolated between
+    // raw single quotes, which broke the quoting if the model name contained one.
+    const std::string payload = "{\"model\":\"" + json_escape(model) + "\"}";
     const std::string cmd = "curl -sS --max-time 5 " +
             shell_quote(url + "/api/show") +
-            " -d '{\"model\":\"" + json_escape(model) + "\"}' 2>/dev/null";
+            " -d " + shell_quote(payload) + " 2>/dev/null";
     const std::string result = run_command_capture(cmd);
     return result.find("\"error\"") == std::string::npos && !result.empty();
 }
-
-}  // namespace
 
 DiagnoseResult run_diagnose(const std::filesystem::path& /*root*/, const Config& cfg) {
     DiagnoseResult r;
     r.ollama_url   = cfg.ollama_url;
     r.embed_model  = cfg.embedding_model;
     r.chat_model   = cfg.chat_model;
+    r.plan_model    = resolve_model(cfg, TaskType::Plan);
+    r.develop_model = resolve_model(cfg, TaskType::Develop);
     r.embed_dim_fallback = cfg.fallback_embedding_dim;
 
     r.ollama_reachable = check_ollama_reachable(cfg.ollama_url);
@@ -77,6 +82,16 @@ DiagnoseResult run_diagnose(const std::filesystem::path& /*root*/, const Config&
 
     r.embed_model_ok = check_model_available(cfg.ollama_url, cfg.embedding_model);
     r.chat_model_ok  = check_model_available(cfg.ollama_url, cfg.chat_model);
+    // The chat model is not the only one that matters: 'patch' uses
+    // develop_model and 'plan' uses plan_model. If they are not validated, a
+    // missing model fails later with a misleading error ("Model returned an
+    // empty patch").
+    r.plan_model_ok    = (r.plan_model == cfg.chat_model)
+                             ? r.chat_model_ok
+                             : check_model_available(cfg.ollama_url, r.plan_model);
+    r.develop_model_ok = (r.develop_model == cfg.chat_model)
+                             ? r.chat_model_ok
+                             : check_model_available(cfg.ollama_url, r.develop_model);
 
     const std::string test_text = "authentication token validation session";
 
@@ -119,6 +134,10 @@ void print_diagnose(const DiagnoseResult& r) {
     std::cout << "Ollama URL:        " << r.ollama_url << "  " << status(r.ollama_reachable) << '\n';
     std::cout << "Embedding model:   " << r.embed_model << "  " << status(r.embed_model_ok) << '\n';
     std::cout << "Chat model:        " << r.chat_model << "  " << status(r.chat_model_ok) << '\n';
+    std::cout << "Plan model:        " << r.plan_model << "  " << status(r.plan_model_ok)
+              << "   \033[90m(used by 'plan')\033[0m\n";
+    std::cout << "Develop model:     " << r.develop_model << "  " << status(r.develop_model_ok)
+              << "   \033[90m(used by 'patch')\033[0m\n";
     std::cout << "Embedding dim:     " << r.embed_dim_ollama << '\n';
     std::cout << "Fallback dim:      " << r.embed_dim_fallback << '\n';
     std::cout << std::fixed << std::setprecision(2);
@@ -142,5 +161,15 @@ void print_diagnose(const DiagnoseResult& r) {
     }
     if (!r.chat_model_ok) {
         std::cout << "Run: ollama pull " << r.chat_model << '\n';
+    }
+    if (!r.plan_model_ok) {
+        std::cout << "Run: ollama pull " << r.plan_model
+                  << "   (or change \"plan_model\" in .ultracode/config.json)\n";
+    }
+    if (!r.develop_model_ok) {
+        std::cout << "Run: ollama pull " << r.develop_model
+                  << "   (or change \"develop_model\" in .ultracode/config.json)\n";
+        std::cout << "\033[33mWarning: without this model the 'patch' command will fail "
+                     "with \"Model returned an empty patch\".\033[0m\n";
     }
 }

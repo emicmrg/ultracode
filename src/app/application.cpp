@@ -497,7 +497,7 @@ int cmd_patch(const fs::path& root,
         "File: path/to/target/file.ext\n"
         "<<<<<<< SEARCH\n"
         "[exact lines to replace from the original file]\n"
-        "=======\\n"
+        "=======\n"
         "[new lines to insert]\n"
         ">>>>>>> REPLACE\n\n"
         "CRITICAL RULES:\n"
@@ -522,6 +522,21 @@ int cmd_patch(const fs::path& root,
         user += "\nWorking tree diff:\n" + diff_context.diff_text;
     }
     const std::string full_prompt = "SYSTEM:\n" + system + "\n\nUSER:\n" + user;
+
+    // Pre-flight check: 'patch' uses develop_model, which may differ from
+    // chat_model. Without this, a missing model returns an empty response and
+    // the reported error ("Model returned an empty patch") points at the wrong
+    // cause, making the failure practically undebuggable.
+    const std::string develop_model = resolve_model(cfg, TaskType::Develop);
+    if (!check_model_available(cfg.ollama_url, develop_model)) {
+        std::cerr << "\033[31mModel '" << develop_model
+                  << "' (develop_model) is not available in Ollama.\033[0m\n"
+                  << "  Install it:  ollama pull " << develop_model << '\n'
+                  << "  Or change \"develop_model\" in .ultracode/config.json\n"
+                  << "  Verify:      ultracode diagnose\n";
+        return 1;
+    }
+
     const OllamaClient ollama(cfg);
     
     std::cout << "\n\033[36mThinking... (streaming model output)\033[0m\n";

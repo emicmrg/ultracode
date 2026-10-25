@@ -226,11 +226,12 @@ static void test_patch_apply_reject_workflow() {
     init_git_repo(repo);
 
     const std::string diff_text =
-        "--- a/note.txt\n"
-        "+++ b/note.txt\n"
-        "@@ -1 +1 @@\n"
-        "-hello\n"
-        "+hi\n";
+        "File: note.txt\n"
+        "<<<<<<< SEARCH\n"
+        "hello\n"
+        "=======\n"
+        "hi\n"
+        ">>>>>>> REPLACE\n";
     const auto targets = extract_patch_target_paths(diff_text);
     assert(targets.size() == 1 && targets.front() == "note.txt");
 
@@ -267,19 +268,21 @@ static void test_patch_sanitization_and_validation() {
     write_text(repo / "note.txt", "hello\n");
     init_git_repo(repo);
 
+    // The engine is SEARCH/REPLACE, not unified diff. sanitize_patch_text today
+    // only normalizes whitespace: the parser tolerates markdown fences by itself.
     const std::string fenced =
         "Here is your patch:\n"
-        "```diff\n"
-        "diff --git a/note.txt b/note.txt\n"
-        "--- a/note.txt\n"
-        "+++ b/note.txt\n"
-        "@@ -1 +1 @@\n"
-        "-hello\n"
-        "+hi\n"
+        "```\n"
+        "File: note.txt\n"
+        "<<<<<<< SEARCH\n"
+        "hello\n"
+        "=======\n"
+        "hi\n"
+        ">>>>>>> REPLACE\n"
         "```\n";
     const std::string sanitized = sanitize_patch_text(fenced);
-    assert(sanitized.find("```") == std::string::npos);
-    assert(sanitized.rfind("diff --git a/note.txt b/note.txt", 0) == 0);
+    assert(sanitized.find("<<<<<<< SEARCH") != std::string::npos);
+    assert(sanitized.find(">>>>>>> REPLACE") != std::string::npos);
 
     std::string error;
     if (!validate_patch_text(repo, sanitized, &error)) {
@@ -287,21 +290,45 @@ static void test_patch_sanitization_and_validation() {
         assert(false);
     }
 
-    const std::string truncated =
-        "diff --git a/note.txt b/note.txt\n"
-        "--- a/note.txt\n"
-        "+++ b/note.txt\n";
-    assert(!validate_patch_text(repo, truncated, &error));
-    assert(error == "Model did not return a complete unified diff.");
+    // Empty
+    assert(!validate_patch_text(repo, "   \n", &error));
+    assert(error == "Model returned an empty patch.");
 
-    const std::string corrupt =
-        "diff --git a/note.txt b/note.txt\n"
-        "--- a/note.txt\n"
-        "+++ b/note.txt\n"
-        "@@ -1 +1 @@\n"
-        "-hello\n";
-    assert(!validate_patch_text(repo, corrupt, &error));
-    assert(!error.empty());
+    // Text without any block
+    assert(!validate_patch_text(repo, "there are no blocks here\n", &error));
+    assert(error == "Model did not return any valid SEARCH/REPLACE blocks.");
+
+    // Block without a 'File:' declaration
+    const std::string no_file =
+        "<<<<<<< SEARCH\n"
+        "hello\n"
+        "=======\n"
+        "hi\n"
+        ">>>>>>> REPLACE\n";
+    assert(!validate_patch_text(repo, no_file, &error));
+    assert(error == "A SEARCH block is missing a 'File: <path>' declaration.");
+
+    // Target file does not exist
+    const std::string missing_file =
+        "File: does-not-exist.txt\n"
+        "<<<<<<< SEARCH\n"
+        "hello\n"
+        "=======\n"
+        "hi\n"
+        ">>>>>>> REPLACE\n";
+    assert(!validate_patch_text(repo, missing_file, &error));
+    assert(error.rfind("Target file does not exist:", 0) == 0);
+
+    // SEARCH that does not match the actual content
+    const std::string not_found =
+        "File: note.txt\n"
+        "<<<<<<< SEARCH\n"
+        "text that is not in the file\n"
+        "=======\n"
+        "hi\n"
+        ">>>>>>> REPLACE\n";
+    assert(!validate_patch_text(repo, not_found, &error));
+    assert(error.rfind("SEARCH block not found exactly in", 0) == 0);
 
     fs::remove_all(repo);
     std::cout << "PASS: patch sanitization and validation\n";

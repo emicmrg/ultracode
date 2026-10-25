@@ -23,14 +23,14 @@ std::string default_config_json() {
   "ollama_url": "http://127.0.0.1:11434",
   "embedding_model": "nomic-embed-text",
   "chat_model": "qwen2.5-coder:3b",
-  "plan_model": "gemma4-more-context:e4b",
-  "develop_model": "gemma4-more-context:e4b",
+  "plan_model": "",
+  "develop_model": "",
   "top_k": 8,
   "max_context_chars": 24000,
   "max_chunk_lines": 50,
   "embedding_batch_size": 16,
   "fallback_embedding_dim": 256,
-  "notes": "This MVP uses Ollama /api/embed and /api/chat. If Ollama is unavailable, indexing falls back to local hashed embeddings."
+  "notes": "Empty plan_model/develop_model fall back to chat_model. Pointing them at a model that is not installed makes 'patch' fail with 'Model returned an empty patch'. Check with: ultracode diagnose"
 }
 )JSON";
 }

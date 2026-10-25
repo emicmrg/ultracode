@@ -23,9 +23,13 @@ struct DiagnoseResult {
     bool ollama_reachable = false;
     bool embed_model_ok = false;
     bool chat_model_ok = false;
+    bool plan_model_ok = false;
+    bool develop_model_ok = false;
     std::string ollama_url;
     std::string embed_model;
     std::string chat_model;
+    std::string plan_model;
+    std::string develop_model;
     int embed_dim_ollama = 0;
     int embed_dim_fallback = 0;
     double embed_time_ollama_ms = 0.0;
@@ -37,3 +41,9 @@ struct DiagnoseResult {
 DiagnoseResult run_diagnose(const std::filesystem::path& root, const Config& cfg);
 
 void print_diagnose(const DiagnoseResult& result);
+
+// Reusable checks for other commands (e.g. 'patch', which needs to confirm
+// that develop_model exists before invoking it).
+bool check_ollama_reachable(const std::string& url);
+
+bool check_model_available(const std::string& url, const std::string& model);

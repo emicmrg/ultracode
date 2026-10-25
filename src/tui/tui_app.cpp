@@ -22,6 +22,7 @@
 #include "tui/views/patches.hpp"
 
 #include "app/config.hpp"
+#include "app/diagnose.hpp"
 #include "edit/patch_workflow.hpp"
 #include "llm/ollama_client.hpp"
 #include "retrieval/retriever.hpp"
@@ -455,18 +456,36 @@ int run_tui(const fs::path& root, const Config& cfg) {
                                 user += "\nWorking tree diff:\n" + diff_ctx.diff_text;
                             }
 
-                            const std::string raw = ollama.chat(
-                                std::vector<ChatMessage>{
-                                    ChatMessage{"system", build_patch_system_prompt()},
-                                    ChatMessage{"user", user}
-                                },
-                                TaskType::Develop);
+                            // Pre-flight check: 'patch' uses develop_model, which
+                            // may differ from chat_model. Without this, a missing
+                            // model returns empty and the error blames the wrong one.
+                            const std::string develop_model =
+                                resolve_model(cfg, TaskType::Develop);
+                            const bool develop_ok =
+                                check_model_available(cfg.ollama_url, develop_model);
+
+                            std::string raw;
+                            if (develop_ok) {
+                                raw = ollama.chat(
+                                    std::vector<ChatMessage>{
+                                        ChatMessage{"system", build_patch_system_prompt()},
+                                        ChatMessage{"user", user}
+                                    },
+                                    TaskType::Develop);
+                            }
                             const std::string diff = sanitize_patch_text(raw);
                             std::string patch_error;
                             if (!state.chat_history.empty()) {
                                 state.chat_history.pop_back();
                             }
-                            if (!validate_patch_text(root, diff, &patch_error)) {
+                            if (!develop_ok) {
+                                state.chat_history.push_back(
+                                    "patch error: model '" + develop_model +
+                                    "' (develop_model) is not available in Ollama");
+                                state.chat_history.push_back(
+                                    "fix: ollama pull " + develop_model +
+                                    "   or change \"develop_model\" in .ultracode/config.json");
+                            } else if (!validate_patch_text(root, diff, &patch_error)) {
                                 state.chat_history.push_back(
                                     "patch error: " + patch_error);
                                 const int trunc = std::min(400, static_cast<int>(raw.size()));
