@@ -311,7 +311,50 @@ std::vector<Chunk> HeuristicExtractor::extract(const std::string& content,
 // Public entry point
 // ──────────────────────────────────────────────────────────────────────────────
 
-std::vector<Chunk> extract_chunks(const fs::path& root, const fs::path& file) {
+// Chunk boundaries used to be unbounded: a markdown section could span 244
+// lines. Since only the first max_chunk_lines are sent to the model, the
+// embedding described a wider span of text than the model ever saw -- you
+// retrieved on one representation and sent another. Splitting at index time
+// keeps both in agreement and gives finer retrieval granularity.
+static std::vector<Chunk> split_oversized_chunks(const std::vector<Chunk>& chunks,
+                                                  const std::vector<std::string>& lines,
+                                                  const std::string& path,
+                                                  int max_lines) {
+    if (max_lines <= 0) return chunks;
+
+    std::vector<Chunk> out;
+    out.reserve(chunks.size());
+    for (const auto& c : chunks) {
+        if (c.end_line - c.start_line + 1 <= max_lines) {
+            out.push_back(c);
+            continue;
+        }
+        int part = 1;
+        for (int start = c.start_line; start <= c.end_line; start += max_lines) {
+            const int end = std::min(c.end_line, start + max_lines - 1);
+            const std::string content = join_lines(lines, start, end);
+            if (trim(content).empty()) continue;
+            Chunk piece = c;
+            // Line-based chunks encode their range in the symbol, so it has to
+            // be regenerated rather than suffixed, or it would claim a span it
+            // no longer covers.
+            piece.symbol = c.symbol.rfind("lines_", 0) == 0
+                               ? "lines_" + std::to_string(start) + "_" + std::to_string(end)
+                               : c.symbol + " [" + std::to_string(part) + "]";
+            piece.start_line = start;
+            piece.end_line = end;
+            piece.hash = fnv1a_hex(path + content);
+            piece.id = piece.hash;
+            out.push_back(piece);
+            ++part;
+        }
+    }
+    return out;
+}
+
+std::vector<Chunk> extract_chunks(const fs::path& root,
+                                   const fs::path& file,
+                                   int max_chunk_lines) {
     const std::string rel     = fs::relative(file, root).generic_string();
     const std::string lang    = detect_language(file);
     const std::string content = slurp(file);
@@ -320,10 +363,12 @@ std::vector<Chunk> extract_chunks(const fs::path& root, const fs::path& file) {
     TreeSitterExtractor ts;
     if (ts.supports(lang)) {
         auto chunks = ts.extract(content, rel, lang);
-        if (!chunks.empty()) return chunks;
+        if (!chunks.empty())
+            return split_oversized_chunks(chunks, split_lines(content), rel, max_chunk_lines);
     }
 #endif
 
     HeuristicExtractor h;
-    return h.extract(content, rel, lang);
+    auto chunks = h.extract(content, rel, lang);
+    return split_oversized_chunks(chunks, split_lines(content), rel, max_chunk_lines);
 }

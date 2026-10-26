@@ -60,5 +60,10 @@ public:
 // Tries registered extractors in priority order and returns the first
 // non-empty result.  Falls back to HeuristicExtractor if no other extractor
 // handles the language.
+//
+// max_chunk_lines > 0 splits chunks longer than that many lines, so the span an
+// embedding covers matches the span actually sent to the model. 0 disables the
+// split.
 std::vector<Chunk> extract_chunks(const std::filesystem::path& root,
-                                   const std::filesystem::path& file);
+                                   const std::filesystem::path& file,
+                                   int max_chunk_lines = 0);

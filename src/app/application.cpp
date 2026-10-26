@@ -230,7 +230,7 @@ int cmd_index(const fs::path& root) {
             ++summary.changed_files;
         }
 
-        auto chunks = extract_chunks(root, file);
+        auto chunks = extract_chunks(root, file, cfg.max_chunk_lines);
         std::vector<std::string> new_chunk_ids;
         std::set<std::string> new_chunk_set;
         for (auto& c : chunks) {
@@ -629,93 +629,51 @@ int cmd_compare(const fs::path& root,
     const Config cfg = load_config(root);
     const auto diff_context = load_repo_diff_context(root, cfg.max_context_chars / 3);
 
-    const OllamaClient ollama(cfg);
-    std::vector<float> qv = ollama.embed(query);
-    if (qv.empty()) qv = hashed_embedding(query, cfg.fallback_embedding_dim);
+    // Single scoring pass, shared with `search`. This used to duplicate the
+    // lexical scorer inline, so `compare` kept reporting the old behaviour
+    // after the retriever moved to BM25: the diagnostic drifted away from the
+    // very thing it is meant to diagnose.
+    auto scored = score_all_chunks(root, cfg, query, diff_context.changed_paths);
 
-    const auto chunks = load_manifest(root);
-    const auto vectors = load_vector_store(root);
-
-    struct ScoredEntry {
-        RankedChunk ranked;
-        double vec_only;
-        double lex_only;
-    };
-
-    std::vector<ScoredEntry> entries;
-    for (const auto& c : chunks) {
-        const std::string content = slurp(chunk_path(root, c.id));
-        const auto it = vectors.find(c.id);
-        std::vector<float> cv = it != vectors.end() ? it->second : std::vector<float>{};
-        double vs = 0.0;
-        if (!qv.empty() && !cv.empty()) {
-            for (size_t i = 0; i < std::min(qv.size(), cv.size()); ++i) {
-                vs += static_cast<double>(qv[i]) * cv[i];
-            }
-        }
-        entries.push_back(ScoredEntry{
-            RankedChunk{c, 0.0, vs, 0.0, content}, vs, 0.0});
-    }
-
-    for (auto& e : entries) {
-        e.lex_only = 0.0;
-        const auto q = tokenize(query);
-        if (!q.empty()) {
-            const std::string hay = lower(e.ranked.chunk.path + " " + e.ranked.chunk.symbol + " " + e.ranked.content);
-            double hits = 0.0;
-            for (const auto& token : q)
-                if (hay.find(token) != std::string::npos) hits += 1.0;
-            e.lex_only = hits / static_cast<double>(q.size());
-        }
-    }
-
-    std::cout << "=== Vector-only ranking ===\n";
-    {
-        auto by_vec = entries;
-        std::sort(by_vec.begin(), by_vec.end(),
-            [](const ScoredEntry& a, const ScoredEntry& b) { return a.vec_only > b.vec_only; });
+    const auto print_top = [](const std::vector<RankedChunk>& list, bool hybrid, bool vector) {
         int shown = 0;
-        for (const auto& e : by_vec) {
-            if (shown >= 5) break;
-            std::cout << shown + 1 << ". " << e.ranked.chunk.path << ":"
-                      << e.ranked.chunk.start_line << "-" << e.ranked.chunk.end_line
-                      << "  " << e.ranked.chunk.symbol
-                      << "  vec=" << std::fixed << std::setprecision(4) << e.vec_only << '\n';
-            ++shown;
-        }
-    }
-
-    std::cout << "\n=== Lexical-only ranking ===\n";
-    {
-        auto by_lex = entries;
-        std::sort(by_lex.begin(), by_lex.end(),
-            [](const ScoredEntry& a, const ScoredEntry& b) { return a.lex_only > b.lex_only; });
-        int shown = 0;
-        for (const auto& e : by_lex) {
-            if (shown >= 5) break;
-            std::cout << shown + 1 << ". " << e.ranked.chunk.path << ":"
-                      << e.ranked.chunk.start_line << "-" << e.ranked.chunk.end_line
-                      << "  " << e.ranked.chunk.symbol
-                      << "  lex=" << std::fixed << std::setprecision(4) << e.lex_only << '\n';
-            ++shown;
-        }
-    }
-
-    std::cout << "\n=== Hybrid ranking (search command) ===\n";
-    {
-        const auto ranked = retrieve(root, cfg, query, cfg.top_k, diff_context.changed_paths);
-        int shown = 0;
-        for (const auto& r : ranked) {
+        for (const auto& r : list) {
             if (shown >= 5) break;
             std::cout << shown + 1 << ". " << r.chunk.path << ":"
                       << r.chunk.start_line << "-" << r.chunk.end_line
-                      << "  " << r.chunk.symbol
-                      << "  score=" << std::fixed << std::setprecision(3) << r.score
-                      << " vec=" << r.vector_score
-                      << " lex=" << r.lexical_score << '\n';
+                      << "  " << r.chunk.symbol << "  ";
+            if (hybrid) {
+                std::cout << "score=" << std::fixed << std::setprecision(3) << r.score
+                          << " vec=" << std::fixed << std::setprecision(4) << r.vector_score
+                          << " lex=" << r.lexical_score;
+            } else if (vector) {
+                std::cout << "vec=" << std::fixed << std::setprecision(4) << r.vector_score;
+            } else {
+                std::cout << "lex=" << std::fixed << std::setprecision(4) << r.lexical_score;
+            }
+            std::cout << '\n';
             ++shown;
         }
-    }
+    };
+
+    std::cout << "=== Vector-only ranking ===\n";
+    std::sort(scored.begin(), scored.end(),
+              [](const RankedChunk& a, const RankedChunk& b) {
+                  return a.vector_score > b.vector_score;
+              });
+    print_top(scored, false, true);
+
+    std::cout << "\n=== Lexical-only ranking (BM25) ===\n";
+    std::sort(scored.begin(), scored.end(),
+              [](const RankedChunk& a, const RankedChunk& b) {
+                  return a.lexical_score > b.lexical_score;
+              });
+    print_top(scored, false, false);
+
+    std::cout << "\n=== Hybrid ranking (search command) ===\n";
+    std::sort(scored.begin(), scored.end(),
+              [](const RankedChunk& a, const RankedChunk& b) { return a.score > b.score; });
+    print_top(scored, true, false);
     return 0;
 }
 

@@ -29,3 +29,13 @@ std::vector<RankedChunk> retrieve(const std::filesystem::path& root,
                                    int top_k,
                                    const std::set<std::string>& preferred_paths = {},
                                    const std::string& required_path = "");
+
+// Scores every chunk in the index, populating the hybrid, vector and lexical
+// scores. Returned unsorted so the caller can rank by whichever dimension it
+// needs. `compare` uses this so the diagnostic reflects the exact scoring the
+// retriever applies, rather than a duplicated copy that can drift from it.
+std::vector<RankedChunk> score_all_chunks(const std::filesystem::path& root,
+                                           const Config& cfg,
+                                           const std::string& query,
+                                           const std::set<std::string>& preferred_paths = {},
+                                           const std::string& required_path = "");
