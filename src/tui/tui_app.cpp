@@ -56,23 +56,6 @@ std::string build_chat_system_prompt() {
         "what is missing instead of guessing. Be concise.";
 }
 
-std::string build_patch_system_prompt() {
-    return
-        "You are a local coding assistant. To modify code, you MUST use the SEARCH/REPLACE block format.\n"
-        "For each file you want to modify, output a block formatted exactly like this:\n\n"
-        "File: path/to/target/file.ext\n"
-        "<<<<<<< SEARCH\n"
-        "[exact lines to replace from the original file]\n"
-        "=======\n"
-        "[new lines to insert]\n"
-        ">>>>>>> REPLACE\n\n"
-        "CRITICAL RULES:\n"
-        "1. The SEARCH block must match the original file EXACTLY, character-for-character.\n"
-        "2. Include enough context lines in the SEARCH block to make it unique.\n"
-        "3. Do not output unified diffs with + or - signs.\n"
-        "4. Do not output line numbers.";
-}
-
 std::string build_plan_system_prompt() {
     return
         "You are a software architect. Analyze the codebase context and create a plan "
@@ -287,6 +270,59 @@ int run_tui(const fs::path& root, const Config& cfg) {
                     }
                 }
 
+                // Handle /diagnose command
+                {
+                    if (lower(trim(user_msg)) == "/diagnose") {
+                        state.chat_history.push_back("running diagnose...");
+                        state.chat_scroll = 1.0f;
+                        state.chat_streaming = true;
+                        screen.Post(Event::Custom);
+
+                        // Threaded: run_diagnose does model lookups plus an
+                        // embedding call, which can take seconds on a cold
+                        // model load and would otherwise freeze the UI.
+                        std::thread([&, root, cfg] {
+                            try {
+                                const DiagnoseResult r = run_diagnose(root, cfg);
+                                if (!state.chat_history.empty()) {
+                                    state.chat_history.pop_back();
+                                }
+                                const auto mark = [](bool ok) {
+                                    return ok ? "OK  " : "FAIL";
+                                };
+                                state.chat_history.push_back(
+                                    std::string("ollama           ") + mark(r.ollama_reachable) +
+                                    "  " + r.ollama_url);
+                                state.chat_history.push_back(
+                                    std::string("embedding        ") + mark(r.embed_model_ok) +
+                                    "  " + r.embed_model);
+                                state.chat_history.push_back(
+                                    std::string("chat             ") + mark(r.chat_model_ok) +
+                                    "  " + r.chat_model);
+                                state.chat_history.push_back(
+                                    std::string("plan  (/plan)    ") + mark(r.plan_model_ok) +
+                                    "  " + r.plan_model);
+                                state.chat_history.push_back(
+                                    std::string("develop (/patch) ") + mark(r.develop_model_ok) +
+                                    "  " + r.develop_model);
+                                if (!r.error.empty()) {
+                                    state.chat_history.push_back("error: " + r.error);
+                                }
+                            } catch (const std::exception& e) {
+                                if (!state.chat_history.empty()) {
+                                    state.chat_history.pop_back();
+                                }
+                                state.chat_history.push_back(
+                                    std::string("diagnose error: ") + e.what());
+                            }
+                            state.chat_scroll = 1.0f;
+                            state.chat_streaming = false;
+                            screen.Post(Event::Custom);
+                        }).detach();
+                        return true;
+                    }
+                }
+
                 bool is_plan = false;
                 std::string plan_instruction;
                 {
@@ -332,20 +368,39 @@ int run_tui(const fs::path& root, const Config& cfg) {
                                 user += "\nWorking tree diff:\n" + diff_ctx.diff_text;
                             }
 
-                            const std::string raw = ollama.chat(
-                                std::vector<ChatMessage>{
-                                    ChatMessage{"system", build_plan_system_prompt()},
-                                    ChatMessage{"user", user}
-                                },
-                                TaskType::Plan);
-                            
+                            // Pre-flight check: '/plan' uses plan_model, which
+                            // may differ from chat_model. Same failure mode the
+                            // patch flow had: a missing model returns empty and
+                            // the reported error blames the wrong thing.
+                            const std::string plan_model =
+                                resolve_model(cfg, TaskType::Plan);
+                            const bool plan_ok =
+                                check_model_available(cfg.ollama_url, plan_model);
+
+                            std::string raw;
+                            if (plan_ok) {
+                                raw = ollama.chat(
+                                    std::vector<ChatMessage>{
+                                        ChatMessage{"system", build_plan_system_prompt()},
+                                        ChatMessage{"user", user}
+                                    },
+                                    TaskType::Plan);
+                            }
+
                             PlanResult plan = parse_plan_from_response(raw);
                             
                             if (!state.chat_history.empty()) {
                                 state.chat_history.pop_back();
                             }
                             
-                            if (!plan.valid) {
+                            if (!plan_ok) {
+                                state.chat_history.push_back(
+                                    "plan error: model '" + plan_model +
+                                    "' (plan_model) is not available in Ollama");
+                                state.chat_history.push_back(
+                                    "fix: ollama pull " + plan_model +
+                                    "   or change \"plan_model\" in .ultracode/config.json");
+                            } else if (!plan.valid) {
                                 state.chat_history.push_back("plan error: " + plan.error);
                                 const int trunc = std::min(400, static_cast<int>(raw.size()));
                                 state.chat_history.push_back(

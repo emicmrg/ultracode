@@ -26,6 +26,12 @@ struct PatchProposal {
     std::vector<std::string> target_paths;
 };
 
+// System prompt describing the SEARCH/REPLACE format. Shared by the CLI
+// `patch` command and the TUI patch flow: it used to be duplicated in both,
+// and the copies drifted -- one of them emitted a literal "\n" after the
+// separator while the other did not.
+std::string build_patch_system_prompt();
+
 std::string sanitize_patch_text(const std::string& model_output);
 bool validate_patch_text(const std::filesystem::path& root,
                          const std::string& diff_text,

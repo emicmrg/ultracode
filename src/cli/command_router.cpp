@@ -37,6 +37,14 @@ std::optional<CommandRequest> parse_command_request(int argc, char** argv) {
         return std::nullopt;
     }
 
+    // Returning nullopt makes main() print the usage text. Without this,
+    // `ultracode --help` fell through to run_command and reported
+    // "Unknown command: --help".
+    const std::string first = argv[1];
+    if (first == "--help" || first == "-h" || first == "help") {
+        return std::nullopt;
+    }
+
     CommandRequest request;
     request.name = argv[1];
     int arg_start = 2;

@@ -12,11 +12,11 @@ The goal is to test a practical thesis: a coding assistant for limited hardware 
 - Reindexes incrementally by file content hash instead of recomputing the entire repo every run.
 - Calls Ollama `/api/embed` with batched requests when available.
 - Falls back to a local hashed embedding when Ollama is not running.
-- Supports hybrid retrieval: vector score + lexical score.
+- Supports hybrid retrieval: vector score + BM25 lexical score.
 - Prioritizes changed files when the working tree has a local `git diff`.
 - Sends compact XML-tagged context to Ollama `/api/chat`.
 - Supports interactive chat with session commands.
-- Generates unified diff patch proposals and supports explicit `apply` / `reject` flows.
+- Generates SEARCH/REPLACE patch proposals and supports explicit `apply` / `reject` flows.
 - Prints file paths and line ranges as sources.
 - Includes embedding diagnostics (`diagnose`, `compare` commands).
 - **Terminal UI (TUI)**: fullscreen interactive mode with search, chat, index, and patch tabs.
@@ -27,17 +27,26 @@ This first version intentionally avoids external C++ dependencies. It shells out
 
 The indexer supports these languages:
 
-- Heuristic chunking for C/C++, Go, JavaScript/TypeScript, Python, Markdown, and config files.
+- Heuristic chunking for C/C++, Go, Rust, JavaScript/TypeScript, Python, Markdown, and config files.
 - Optional Tree-sitter-backed extraction for C/C++, Go, Python, and TypeScript/JavaScript.
 
 Heuristic extraction covers:
 
 - C/C++: classes, structs, enums, functions.
 - Go: functions, methods with receivers, structs, and interfaces.
+- Rust: functions, structs, enums, traits, and unions. Methods are qualified
+  with their enclosing `impl` (for example `PhotoInfo::new()`). `impl` and `mod`
+  blocks are not emitted as chunks of their own, to avoid oversized ones.
 - Python: classes and functions.
 - JavaScript/TypeScript: class/function-like blocks using the C-like extractor.
 - Markdown: sections by heading.
 - Config files: line-based chunks.
+
+Chunks longer than `max_chunk_lines` are split at index time, so the span an
+embedding covers matches the span actually sent to the model.
+
+Files whose extension maps to no language are skipped, and `index` reports how
+many and which extensions, so a whole language cannot go missing unnoticed.
 
 ## Requirements
 
@@ -111,13 +120,13 @@ This command is incremental:
 - removes chunk artifacts for deleted files
 - updates a binary `vectors.bin` store plus per-file state under `.ultracode/`
 
-Output now includes Ollama vs fallback vector percentages and a warning when >50% of vectors use local fallback.
+Output now includes Ollama vs fallback vector percentages and a warning when >50% of vectors use local fallback. It also reports files that were skipped: how many had an unsupported extension (broken down by extension) and how many exceeded the 1 MB size limit.
 
 Ignored directories include `.git`, `.ultracode`, `build`, `dist`, `target`, `node_modules`, virtualenv folders, and common editor folders.
 
 ### `search <query>`
 
-Runs hybrid retrieval and prints the top chunks with scores. If the repo has local `git` changes, changed files receive a ranking boost.
+Runs hybrid retrieval and prints the top chunks with scores. The lexical half uses BM25 (term frequency, IDF and length normalisation), normalised per query so it shares the 0..1 scale of the vector score. If the repo has local `git` changes, changed files receive a ranking boost.
 
 Options:
 - `--file <path>` — boost results matching a specific file
@@ -149,6 +158,13 @@ Launches a fullscreen terminal interface with four tabbed views:
 
 Navigation: `F1`-`F4` for tabs, `Tab`/`Shift+Tab` to cycle, `Esc` to quit.
 
+In-chat commands:
+
+- `/patch <instruction>` — generate a patch proposal
+- `/plan <instruction>` — produce a structured plan first
+- `/model [name]` — show or override the chat model for this session
+- `/diagnose` — check Ollama and every configured model without leaving the TUI
+
 ### `patch <instruction>`
 
 Asks the model for a unified diff, stores it under `.ultracode/patches/`, and prints the generated patch id plus affected files.
@@ -170,6 +186,12 @@ Sends a single file to the configured chat model for explanation.
 ### `diagnose`
 
 Tests Ollama connectivity, model availability, embedding dimensions, latency, and cosine similarity between Ollama and fallback vectors. Helps verify the embedding pipeline is working correctly.
+
+It validates every model the tool uses, not just `chat_model`: `plan_model`
+(used by `plan`) and `develop_model` (used by `patch`) are checked too. Pointing
+either of them at a model that is not installed otherwise surfaces much later as
+"Model returned an empty patch", which blames the model output rather than the
+missing model.
 
 ### `compare <query>`
 
@@ -195,8 +217,12 @@ Current tradeoffs:
 
 - HTTP access still shells out to `curl` instead of using an internal client.
 - The vector index is still brute-force search; there is no ANN backend yet.
-- Patch generation depends on the model returning a valid unified diff.
-- Patch application uses `git apply`, but there is no interactive diff preview command yet.
+- Patch generation depends on the model returning well-formed SEARCH/REPLACE
+  blocks whose SEARCH half matches the file byte for byte.
+- Patch application rewrites files directly; there is no interactive diff
+  preview command outside the TUI.
+- There is no agentic loop: a patch is a single shot, with no tool calling and
+  no verification step after applying.
 - Tree-sitter support is optional and still not the default build path.
 
 ## Architecture

@@ -182,7 +182,8 @@ int cmd_index(const fs::path& root) {
     std::vector<ChunkEmbeddingRequest> pending_embeddings;
     IndexRunSummary summary;
 
-    const auto files = scan_repo(root, cfg);
+    ScanSkips skips;
+    const auto files = scan_repo(root, cfg, &skips);
     summary.scanned_files = static_cast<int>(files.size());
     for (const auto& file : files) {
         const std::string rel = fs::relative(file, root).generic_string();
@@ -318,6 +319,26 @@ int cmd_index(const fs::path& root) {
     } else {
         std::cout << "Vectors: " << summary.ollama_vectors << " from Ollama, "
                   << summary.fallback_vectors << " local fallback.\n";
+    }
+
+    // Report what the scan dropped. These files are invisible to every later
+    // command, so staying quiet about them hides entire languages.
+    if (skips.unsupported > 0) {
+        std::vector<std::pair<std::string, int>> by_ext(
+            skips.unsupported_by_extension.begin(), skips.unsupported_by_extension.end());
+        std::sort(by_ext.begin(), by_ext.end(),
+                  [](const auto& a, const auto& b) { return a.second > b.second; });
+        std::cout << "Skipped " << skips.unsupported
+                  << " file(s) with unsupported extensions: ";
+        for (size_t i = 0; i < by_ext.size() && i < 6; ++i) {
+            if (i > 0) std::cout << ", ";
+            std::cout << by_ext[i].first << " (" << by_ext[i].second << ")";
+        }
+        if (by_ext.size() > 6) std::cout << ", ...";
+        std::cout << '\n';
+    }
+    if (skips.too_large > 0) {
+        std::cout << "Skipped " << skips.too_large << " file(s) over 1 MB.\n";
     }
     return 0;
 }
@@ -491,21 +512,8 @@ int cmd_patch(const fs::path& root,
     debug.context_chars_total = used;
     debug.git_diff_chars = static_cast<int>(diff_context.diff_text.size());
 
-    const std::string system =
-        "You are a local coding assistant. To modify code, you MUST use the SEARCH/REPLACE block format.\n"
-        "For each file you want to modify, output a block formatted exactly like this:\n\n"
-        "File: path/to/target/file.ext\n"
-        "<<<<<<< SEARCH\n"
-        "[exact lines to replace from the original file]\n"
-        "=======\n"
-        "[new lines to insert]\n"
-        ">>>>>>> REPLACE\n\n"
-        "CRITICAL RULES:\n"
-        "1. The SEARCH block must match the original file EXACTLY, character-for-character.\n"
-        "2. Include enough context lines in the SEARCH block to make it unique.\n"
-        "3. Do not output unified diffs with + or - signs.\n"
-        "4. Do not output line numbers.";
-        
+    const std::string system = build_patch_system_prompt();
+
     std::string user =
         "Requested change:\n" + instruction +
         "\n\nRelevant code context:\n" + ctx.str() +

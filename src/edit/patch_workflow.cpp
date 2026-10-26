@@ -114,20 +114,29 @@ bool update_patch_status(const fs::path& root,
 
 }  // namespace
 
+std::string build_patch_system_prompt() {
+    return
+        "You are a local coding assistant. To modify code, you MUST use the SEARCH/REPLACE block format.\n"
+        "For each file you want to modify, output a block formatted exactly like this:\n\n"
+        "File: path/to/target/file.ext\n"
+        "<<<<<<< SEARCH\n"
+        "[exact lines to replace from the original file]\n"
+        "=======\n"
+        "[new lines to insert]\n"
+        ">>>>>>> REPLACE\n\n"
+        "CRITICAL RULES:\n"
+        "1. The SEARCH block must match the original file EXACTLY, character-for-character.\n"
+        "2. Include enough context lines in the SEARCH block to make it unique.\n"
+        "3. Do not output unified diffs with + or - signs.\n"
+        "4. Do not output line numbers.";
+}
+
 std::string sanitize_patch_text(const std::string& model_output) {
-    // Para SEARCH/REPLACE, no queremos eliminar las etiquetas, 
-    // pero podemos limpiar bloques markdown genéricos si el modelo los añadió.
-    std::string text = trim(model_output);
-    const size_t diff_block = text.find("```");
-    if (diff_block != std::string::npos) {
-        // Solo extraemos si hay un SEARCH block adentro
-        if (text.find("<<<<<<< SEARCH") != std::string::npos) {
-            // Do not strip markdown blindly if it breaks the block, 
-            // but usually we can just return the raw text as our parser is robust.
-            return text;
-        }
-    }
-    return text;
+    // Only whitespace normalisation. Markdown fences are deliberately left in
+    // place: parse_search_replace_blocks locates the <<<<<<< / ======= />>>>>>>
+    // markers positionally, so a surrounding ```fence does not interfere, while
+    // stripping it blindly risked cutting into the block contents.
+    return trim(model_output);
 }
 
 struct ParsedBlock {

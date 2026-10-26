@@ -94,7 +94,8 @@ Element render_chat_view(TuiState& state,
     if (state.chat_history.empty()) {
         history_items.push_back(
             text(" No conversation yet. Type a message and press Enter. "
-                 "Use /patch <instruction> to generate a patch.")
+                 "Commands: /patch <instruction>, /plan <instruction>, "
+                 "/model [name], /diagnose")
             | dim | center);
     } else {
         const int turns = static_cast<int>(state.chat_history.size()) / 2;

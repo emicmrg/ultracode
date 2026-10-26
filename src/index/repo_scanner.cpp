@@ -30,7 +30,7 @@ bool should_ignore(const fs::path& p, const Config& cfg) {
     return false;
 }
 
-std::vector<fs::path> scan_repo(const fs::path& root, const Config& cfg) {
+std::vector<fs::path> scan_repo(const fs::path& root, const Config& cfg, ScanSkips* skips) {
     std::vector<fs::path> files;
     for (auto it = fs::recursive_directory_iterator(root);
          it != fs::recursive_directory_iterator(); ++it) {
@@ -40,10 +40,21 @@ std::vector<fs::path> scan_repo(const fs::path& root, const Config& cfg) {
             continue;
         }
         if (!it->is_regular_file()) continue;
-        if (detect_language(p).empty()) continue;
+        if (detect_language(p).empty()) {
+            if (skips) {
+                std::string ext = p.extension().string();
+                if (ext.empty()) ext = "(no extension)";
+                ++skips->unsupported_by_extension[ext];
+                ++skips->unsupported;
+            }
+            continue;
+        }
         std::error_code ec;
         const auto size = fs::file_size(p, ec);
-        if (ec || size > 1024 * 1024) continue;
+        if (ec || size > 1024 * 1024) {
+            if (skips && !ec) ++skips->too_large;
+            continue;
+        }
         files.push_back(p);
     }
     return files;
